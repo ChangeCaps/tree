@@ -1,5 +1,6 @@
 mod plant;
 mod ron_loader;
+mod sun;
 
 use bevy::prelude::*;
 use rand::prelude::*;
@@ -10,8 +11,10 @@ fn main() {
         // plugins
         .add_plugins(DefaultPlugins)
         .add_plugin(plant::PlantPlugin)
+        .add_plugin(sun::SunPlugin)
         // startup systems
         .add_startup_system(setup.system())
+        .add_startup_system(bevy_mod_debugdump::print_render_graph.system())
         // system
         .add_system(character_system.system())
         .add_system(cursor_grab_system.system())
@@ -32,6 +35,11 @@ fn setup(
         })
         .insert(PlayerCamera::new());
 
+    commands.spawn_bundle(PerspectiveCameraBundle {
+        transform: Transform::from_translation(Vec3::new(0.0, 2.0, 10.0)),
+        ..PerspectiveCameraBundle::with_name("sun_camera")
+    });
+
     let mut rng = thread_rng();
 
     for _ in 0..50 {
@@ -41,11 +49,13 @@ fn setup(
         let mut transform = Transform::from_translation(Vec3::new(x, 0.0, z));
         transform.rotation = Quat::from_rotation_y(rng.gen_range(0.0..std::f32::consts::TAU));
 
-        commands.spawn_bundle(plant::PlantBundle {
-            mesh: asset_server.load("plants/test.gno"),
-            transform,
-            ..Default::default()
-        });
+        commands
+            .spawn_bundle(plant::PlantBundle {
+                mesh: asset_server.load("plants/test.gno"),
+                transform,
+                ..Default::default()
+            })
+            .insert(sun::ShadowPass::default());
     }
 
     commands.spawn_bundle(PbrBundle {

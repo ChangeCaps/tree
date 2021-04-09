@@ -7,6 +7,7 @@ layout(location = 3) in int Plant_Material;
 
 layout(location = 0) out vec3 v_Normal;
 layout(location = 1) out int v_Material;
+layout(location = 2) out vec3 v_WorldPos;
 
 layout(set = 0, binding = 0) uniform CameraViewProj {
     mat4 ViewProj;
@@ -33,4 +34,5 @@ void main() {
     v_Normal = normal.xyz;
 
     v_Material = Plant_Material;
+	v_WorldPos = world_position;
 }
