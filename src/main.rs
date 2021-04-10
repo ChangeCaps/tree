@@ -4,6 +4,7 @@ mod sun;
 
 use bevy::prelude::*;
 use rand::prelude::*;
+use bevy::render::camera::OrthographicProjection;
 
 fn main() {
     App::build()
@@ -36,7 +37,7 @@ fn setup(
         .insert(PlayerCamera::new());
 
     commands.spawn_bundle(PerspectiveCameraBundle {
-        transform: Transform::from_translation(Vec3::new(0.0, 2.0, 10.0)),
+        transform: Transform::from_translation(Vec3::new(0.0, 2.0, 15.0)),
         ..PerspectiveCameraBundle::with_name("sun_camera")
     });
 
@@ -55,14 +56,14 @@ fn setup(
                 transform,
                 ..Default::default()
             })
-            .insert(sun::ShadowPass::default());
+            .insert(sun::Shadow::default());
     }
 
     commands.spawn_bundle(PbrBundle {
         mesh: meshes.add(shape::Plane { size: 2000.0 }.into()),
         material: materials.add(Color::rgb_linear(155.0, 118.0, 83.0).into()),
         ..Default::default()
-    });
+    }).insert(sun::Shadow::default());
 }
 
 pub struct PlayerCamera {

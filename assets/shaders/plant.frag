@@ -16,20 +16,25 @@ layout(set = 0, binding = 1) uniform SunCameraViewProj {
 
 void main() {
 	vec4 projected = ViewProj * vec4(v_WorldPos, 1.0);
-	vec4 depth = texture(sampler2D(ShadowTexture, ShadowTexture_sampler), (projected.xy + 1.0) * 0.5);
+    projected.y *= -1.0;
+    vec2 uv = (projected.xy + 1.0) / 2.0;
+	vec4 depth = texture(sampler2D(ShadowTexture, ShadowTexture_sampler), uv);
 
-    vec3 color;
+    vec3 color = vec3(1.0);
 
     if (v_Material == 0) {
-        color = vec3(155.0 / 255.0, 118.0 / 255.0, 83.0 / 255.0);
+        //color = vec3(155.0 / 255.0, 118.0 / 255.0, 83.0 / 255.0);
     } else {
-        color = vec3(0.1, 0.8, 0.2);
+        //color = vec3(0.1, 0.8, 0.2);
     }
 
     float sun_diffuse = clamp(dot(v_Normal, vec3(1.0, 1.0, 0.0)), 0.01, 1.0);
 
-    color *= sun_diffuse;
-	color *= depth.r;
+    //color *= sun_diffuse;
+
+    if (abs(projected.z - depth.z) > 0.01) {   
+	    color = vec3(0.0);
+    }
 
     o_Target = vec4(color, 1.0);
 }

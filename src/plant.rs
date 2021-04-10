@@ -514,10 +514,12 @@ impl Plugin for PlantPlugin {
         let vert = asset_server.load("shaders/plant.vert");
         let frag = asset_server.load("shaders/plant.frag");
 
-        let pipeline = PipelineDescriptor::default_config(ShaderStages {
-            vertex: vert,
-            fragment: Some(frag),
-        });
+        let pipeline = PipelineDescriptor {
+            ..PipelineDescriptor::default_config(ShaderStages {
+                vertex: vert,
+                fragment: Some(frag),
+            })
+        };
 
         app_builder
             .world_mut()

@@ -6,10 +6,10 @@ use bevy::{
     render::{
         camera::{ActiveCameras, Camera},
         pass::{
-            LoadOp, Operations, PassDescriptor, RenderPassDepthStencilAttachmentDescriptor,
-            TextureAttachment,
+            LoadOp, Operations, PassDescriptor, RenderPassColorAttachmentDescriptor,
+            RenderPassDepthStencilAttachmentDescriptor, TextureAttachment,
         },
-        pipeline::{PipelineDescriptor, RenderPipeline},
+        pipeline::{DepthStencilState, MultisampleState, PipelineDescriptor, RenderPipeline},
         render_graph::{
             base, AssetRenderResourcesNode, CameraNode, CommandQueue, Node, PassNode, RenderGraph,
             ResourceSlotInfo, ResourceSlots, SystemNode,
@@ -33,21 +33,33 @@ const SHADOW_PIPELINE: HandleUntyped =
     HandleUntyped::weak_from_u64(PipelineDescriptor::TYPE_UUID, 15348723);
 
 pub struct SunNode {
-    descriptor: TextureDescriptor,
+    color: TextureDescriptor,
+    attachment: TextureDescriptor,
+    depth: TextureDescriptor,
 }
 
 impl SunNode {
-    pub fn new(descriptor: TextureDescriptor) -> Self {
-        Self { descriptor }
+    pub fn new(color: TextureDescriptor, attachment: TextureDescriptor, depth: TextureDescriptor) -> Self {
+        Self { color, attachment, depth }
     }
 }
 
 impl Node for SunNode {
     fn output(&self) -> &[ResourceSlotInfo] {
-        static OUTPUT: &[ResourceSlotInfo] = &[ResourceSlotInfo {
-            name: std::borrow::Cow::Borrowed(DEPTH_TEXTURE),
-            resource_type: RenderResourceType::Texture,
-        }];
+        static OUTPUT: &[ResourceSlotInfo] = &[
+            ResourceSlotInfo {
+                name: std::borrow::Cow::Borrowed(DEPTH_TEXTURE),
+                resource_type: RenderResourceType::Texture,
+            },
+            ResourceSlotInfo {
+                name: std::borrow::Cow::Borrowed("color"),
+                resource_type: RenderResourceType::Texture,
+            },
+            ResourceSlotInfo {
+                name: std::borrow::Cow::Borrowed("attachment"),
+                resource_type: RenderResourceType::Texture,
+            },
+        ];
         OUTPUT
     }
 
@@ -59,20 +71,51 @@ impl Node for SunNode {
         output: &mut ResourceSlots,
     ) {
         if output.get(DEPTH_TEXTURE).is_none() {
-            let depth_texture = render_context
-                .resources_mut()
-                .create_texture(self.descriptor);
+            let depth_texture = render_context.resources_mut().create_texture(self.depth);
 
             println!("init shadow_texture");
 
             output.set(DEPTH_TEXTURE, RenderResourceId::Texture(depth_texture));
         }
+
+        if output.get("color").is_none() {
+            let color_texture = render_context.resources_mut().create_texture(self.color);
+
+            println!("init shadow_texture");
+
+            output.set("color", RenderResourceId::Texture(color_texture));
+        }
+
+        if output.get("attachment").is_none() {
+            let color_texture = render_context.resources_mut().create_texture(self.attachment);
+
+            println!("init shadow_texture");
+
+            output.set("attachment", RenderResourceId::Texture(color_texture));
+        }
     }
 }
 
-pub struct ShadowPipelineNode(bool);
+pub struct ShadowPipelineSetNode;
 
-impl Node for ShadowPipelineNode {
+impl Node for ShadowPipelineSetNode {
+    fn prepare(&mut self, world: &mut World) {
+        println!("Setting");
+
+        let mut query = world.query::<(&mut RenderPipelines, &mut ShadowPipeline)>();
+
+        for (mut render_pipelines, mut shadow_pipeline) in query.iter_mut(world) {
+            let rp = std::mem::replace(
+                &mut *render_pipelines,
+                RenderPipelines::from_pipelines(vec![RenderPipeline::new(SHADOW_PIPELINE.typed())]),
+            );
+
+            if shadow_pipeline.0.is_none() {
+                shadow_pipeline.0 = Some(rp);
+            }
+        }
+    }
+
     fn update(
         &mut self,
         _world: &World,
@@ -80,40 +123,41 @@ impl Node for ShadowPipelineNode {
         _input: &ResourceSlots,
         _output: &mut ResourceSlots,
     ) {
-    }
-}
-
-impl SystemNode for ShadowPipelineNode {
-    fn get_system(&self) -> BoxedSystem {
-        let system = shadow_pipeline_system.system().config(|config| {
-            config.0 = Some(self.0);
-        });
-        Box::new(system)
-    }
-}
-
-pub fn shadow_pipeline_system(
-    set: Local<bool>,
-    mut query: Query<(&mut RenderPipelines, &mut ShadowPass)>,
-) {
-    for (mut render_pipelines, mut shadow_pass) in query.iter_mut() {
-        if *set {
-            let rp = std::mem::replace(
-                &mut *render_pipelines,
-                RenderPipelines::from_pipelines(vec![RenderPipeline::new(SHADOW_PIPELINE.typed())]),
-            );
-
-            shadow_pass.0 = Some(rp);
-        } else {
-            if let Some(rp) = shadow_pass.0.take() {
-                *render_pipelines = rp
-            }
-        }
+        println!("Set update");
     }
 }
 
 #[derive(Default)]
-pub struct ShadowPass(Option<RenderPipelines>);
+pub struct ShadowPipeline(Option<RenderPipelines>);
+
+pub struct ShadowPipelineUnsetNode;
+
+impl Node for ShadowPipelineUnsetNode {
+    fn prepare(&mut self, world: &mut World) {
+        println!("Unsetting");
+
+        let mut query = world.query::<(&mut RenderPipelines, &mut ShadowPipeline)>();
+
+        for (mut render_pipelines, shadow_pipeline) in query.iter_mut(world) {
+            if let Some(rp) = shadow_pipeline.0.clone() {
+                *render_pipelines = rp;
+            }
+        }
+    }
+
+    fn update(
+        &mut self,
+        _world: &World,
+        _render_context: &mut dyn RenderContext,
+        _input: &ResourceSlots,
+        _output: &mut ResourceSlots,
+    ) {
+        println!("Unset update");
+    }
+}
+
+#[derive(Default)]
+pub struct ShadowPass;
 
 pub struct ShadowNode {
     command_queue: CommandQueue,
@@ -271,17 +315,46 @@ pub fn shadow_node_system(
     render_resource_context.unmap_buffer(staging_buffer);
 }
 
+#[derive(Default)]
+pub struct Shadow(Option<Entity>);
+
+pub fn shadow_spawn_system(
+    mut commands: Commands,
+    mut query: Query<(Entity, &Handle<Mesh>, &mut Shadow)>,
+) {
+    for (entity, mesh, mut shadow) in query.iter_mut() {
+        if shadow.0.is_none() {
+            let shadow_entity = commands
+                .spawn()
+                .insert(mesh.clone())
+                .insert(RenderPipelines::from_pipelines(vec![RenderPipeline::new(
+                    SHADOW_PIPELINE.typed(),
+                )]))
+                .insert(Draw::default())
+                .insert(Visible::default())
+                .insert(ShadowPass)
+                .insert(Transform::default())
+                .insert(GlobalTransform::default())
+                .insert(Parent(entity))
+                .id();
+
+            shadow.0 = Some(shadow_entity);
+        }
+    }
+}
+
 pub struct SunPlugin;
 
 impl Plugin for SunPlugin {
     fn build(&self, app_builder: &mut AppBuilder) {
+        app_builder.add_system(shadow_spawn_system.system());
+
         let asset_server = app_builder.world().get_resource::<AssetServer>().unwrap();
 
-        let frag = asset_server.load("shaders/shadow.frag");
         let vert = asset_server.load("shaders/shadow.vert");
+        let frag = asset_server.load("shaders/shadow.frag");
 
         let pipeline = PipelineDescriptor {
-            color_target_states: Vec::new(),
             ..PipelineDescriptor::default_config(ShaderStages {
                 vertex: vert,
                 fragment: Some(frag),
@@ -305,68 +378,94 @@ impl Plugin for SunPlugin {
             .get_resource_mut::<RenderGraph>()
             .unwrap();
 
-        let texture_descriptor = TextureDescriptor {
+        let color_descriptor = TextureDescriptor {
+            size: Extent3d::new(4096, 4096, 1),
+            mip_level_count: 1,
+            sample_count: 8,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::default(),
+            usage: TextureUsage::SAMPLED | TextureUsage::OUTPUT_ATTACHMENT,
+        };
+
+        let attachment_descriptor = TextureDescriptor {
             size: Extent3d::new(4096, 4096, 1),
             mip_level_count: 1,
             sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::default(),
+            usage: TextureUsage::SAMPLED | TextureUsage::OUTPUT_ATTACHMENT,
+        };
+
+        let depth_descriptor = TextureDescriptor {
+            size: Extent3d::new(4096, 4096, 1),
+            mip_level_count: 1,
+            sample_count: 8,
             dimension: TextureDimension::D2,
             format: TextureFormat::Depth32Float,
             usage: TextureUsage::SAMPLED | TextureUsage::OUTPUT_ATTACHMENT,
         };
 
         let pass_descriptor = PassDescriptor {
-            color_attachments: Vec::new(),
+            color_attachments: vec![RenderPassColorAttachmentDescriptor {
+                attachment: TextureAttachment::Input("color".to_string()),
+                resolve_target: Some(TextureAttachment::Input("attachment".to_string())),
+                ops: Operations {
+                    load: LoadOp::Clear(Color::rgba(0.0, 0.0, 0.0, 0.0)),
+                    store: true,
+                },
+            }],
             depth_stencil_attachment: Some(RenderPassDepthStencilAttachmentDescriptor {
                 attachment: TextureAttachment::Input("depth".to_string()),
                 depth_ops: Some(Operations {
-                    load: LoadOp::Clear(0.0),
+                    load: LoadOp::Clear(1.0),
                     store: true,
                 }),
-                stencil_ops: Some(Operations {
-                    load: LoadOp::Clear(0),
-                    store: true,
-                }),
+                stencil_ops: None,
             }),
-            sample_count: 0,
+            sample_count: 1,
         };
 
         let mut sun_pass_node = PassNode::<&ShadowPass>::new(pass_descriptor);
 
         sun_pass_node.add_camera("sun_camera");
 
-        render_graph.add_node("sun_node", SunNode::new(texture_descriptor));
+        render_graph.add_node("sun_node", SunNode::new(color_descriptor, attachment_descriptor, depth_descriptor));
         render_graph.add_node("sun_pass_node", sun_pass_node);
         render_graph.add_system_node("sun_camera_node", CameraNode::new("sun_camera"));
         render_graph.add_system_node("shadow_node", ShadowNode::new());
-        render_graph.add_system_node("shadow_set_node", ShadowPipelineNode(true));
-        render_graph.add_system_node("shadow_unset_node", ShadowPipelineNode(false));
+
+        render_graph.add_node_edge("transform", "sun_pass_node").unwrap();
 
         render_graph
-            .add_node_edge("sun_node", "shadow_set_node")
-            .unwrap();
-        render_graph
-            .add_node_edge("shadow_set_node", "sun_pass_node")
-            .unwrap();
-        render_graph
-            .add_node_edge("sun_pass_node", "shadow_unset_node")
-            .unwrap();
-        render_graph
-            .add_node_edge("shadow_unset_node", "shadow_node")
+            .add_node_edge("sun_pass_node", "shadow_node")
             .unwrap();
         render_graph
             .add_node_edge("shadow_node", base::node::MAIN_PASS)
             .unwrap();
 
         render_graph
-            .add_node_edge("sun_camera_node", base::node::MAIN_PASS)
+            .add_node_edge(base::node::SHARED_BUFFERS, "sun_pass_node")
+            .unwrap();
+        render_graph
+            .add_node_edge(base::node::TEXTURE_COPY, "sun_pass_node")
+            .unwrap();
+
+        render_graph
+            .add_node_edge("sun_camera_node", "sun_pass_node")
             .unwrap();
 
         render_graph
             .add_slot_edge("sun_node", DEPTH_TEXTURE, "sun_pass_node", "depth")
             .unwrap();
+        render_graph
+            .add_slot_edge("sun_node", "color", "sun_pass_node", "color")
+            .unwrap();
+            render_graph
+            .add_slot_edge("sun_node", "attachment", "sun_pass_node", "attachment")
+            .unwrap();
 
         render_graph
-            .add_slot_edge("sun_node", DEPTH_TEXTURE, "shadow_node", DEPTH_TEXTURE)
+            .add_slot_edge("sun_node", "attachment", "shadow_node", DEPTH_TEXTURE)
             .unwrap();
     }
 }
