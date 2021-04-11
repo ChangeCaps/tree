@@ -6,21 +6,17 @@ layout(location = 2) in vec3 v_WorldPos;
 
 layout(location = 0) out vec4 o_Target;
 
-layout(set = 3, binding = 0) uniform texture2D ShadowTexture;
-layout(set = 3, binding = 1) uniform sampler ShadowTexture_sampler;
-
-layout(set = 0, binding = 1) uniform SunCameraViewProj {
-	mat4 ViewProj;
-};
-
-
 void main() {
+    /*
 	vec4 projected = ViewProj * vec4(v_WorldPos, 1.0);
-    projected.y *= -1.0;
-    vec2 uv = (projected.xy + 1.0) / 2.0;
-	vec4 depth = texture(sampler2D(ShadowTexture, ShadowTexture_sampler), uv);
+    //projected.y *= -1.0;
+    float v = 16.0;
+    vec2 uv = (projected.xy * vec2(1.0, -1.0) + v) / (2.0 * v);
 
-    vec3 color = vec3(1.0);
+    float dist = length(v_WorldPos - Pos) / 1000.0;
+    */
+
+    vec3 color = vec3(1.0) * 0.1;
 
     if (v_Material == 0) {
         //color = vec3(155.0 / 255.0, 118.0 / 255.0, 83.0 / 255.0);
@@ -31,10 +27,6 @@ void main() {
     float sun_diffuse = clamp(dot(v_Normal, vec3(1.0, 1.0, 0.0)), 0.01, 1.0);
 
     //color *= sun_diffuse;
-
-    if (abs(projected.z - depth.z) > 0.01) {   
-	    color = vec3(0.0);
-    }
 
     o_Target = vec4(color, 1.0);
 }

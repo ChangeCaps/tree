@@ -29,7 +29,7 @@ void main() {
     sway = pow(sway, 1.3);
     //world_position.xz += sin(time) * sway * 0.005;
 
-    gl_Position = ViewProj * vec4(world_position, 1.0);
+    gl_Position = ViewProj * vec4(Vertex_Position, 1.0);
     vec4 normal = Model * vec4(Vertex_Normal, 0.0);
     v_Normal = normal.xyz;
 
