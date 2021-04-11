@@ -2,8 +2,13 @@
 
 layout(location = 0) in vec4 v_Pos;
 layout(location = 1) in vec3 v_WorldPos;
-layout(location = 0) out vec4 o_Target;
+
+layout(set = 0, binding = 0) uniform Sun {
+	mat4 ViewProj;
+	vec3 Pos;
+};
 
 void main() {
-	//gl_FragDepth = length(v_WorldPos - Pos) / 1000.0;
+	float far = ViewProj[3][3] - ViewProj[2][3];
+	gl_FragDepth = length(v_WorldPos - Pos) / 200.0;
 }

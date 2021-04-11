@@ -7,7 +7,7 @@ use bevy::{
     prelude::*,
     reflect::TypeUuid,
     render::{
-        camera::{CameraProjection, PerspectiveProjection},
+        camera::{CameraProjection, PerspectiveProjection, OrthographicProjection, ActiveCameras},
         draw::{DrawContext, RenderCommand},
         mesh::{Indices, INDEX_BUFFER_ASSET_INDEX, VERTEX_ATTRIBUTE_BUFFER_ID},
         pass::{
@@ -18,7 +18,7 @@ use bevy::{
             BlendFactor, BlendOperation, BlendState, ColorTargetState, ColorWrite, CompareFunction,
             DepthBiasState, DepthStencilState, IndexFormat, MultisampleState, PipelineDescriptor,
             PipelineSpecialization, PrimitiveTopology, RenderPipeline, StencilFaceState,
-            StencilState,
+            StencilState, PrimitiveState, CullMode,
         },
         render_graph::{
             base, AssetRenderResourcesNode, CameraNode, CommandQueue, Node, PassNode, RenderGraph,
@@ -32,7 +32,7 @@ use bevy::{
         shader::ShaderStages,
         texture::{
             AddressMode, Extent3d, FilterMode, SamplerDescriptor, TextureDescriptor,
-            TextureDimension, TextureFormat, TextureUsage,
+            TextureDimension, TextureFormat, TextureUsage, TEXTURE_ASSET_INDEX, SAMPLER_ASSET_INDEX,
         },
     },
 };
@@ -40,8 +40,10 @@ use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 const SUN_NODE: &str = "sun_node";
-const SHADOW_TEXTURE: &str = "shadow_texture";
-const SHADOW_TEXTURE_SAMPLER: &str = "shadow_texture_sampler";
+const SHADOW_MAP_HANDLE: HandleUntyped = HandleUntyped::weak_from_u64(Texture::TYPE_UUID, 16478324);
+const SHADOW_MAP_NODE: &str = "shadow_map_node";
+const SHADOW_MAP_TEXTURE: &str = "shadow_map_texture";
+const SHADOW_MAP_SAMPLER: &str = "shadow_map_sampler";
 const SHADOWS_NODE: &str = "shadows_node";
 const SHADOW_TEXTURE_NODE: &str = "shadow_texture_node";
 const SHADOW_PIPELINE_HANDLE: HandleUntyped =
@@ -50,16 +52,19 @@ const SHADOW_PIPELINE_HANDLE: HandleUntyped =
 pub struct TextureNode {
     texture_descriptor: TextureDescriptor,
     sampler_descriptor: SamplerDescriptor,
+    handle: HandleUntyped,
 }
 
 impl TextureNode {
     pub fn new(
         texture_descriptor: TextureDescriptor,
         sampler_descriptor: SamplerDescriptor,
+        handle: HandleUntyped
     ) -> Self {
         Self {
             texture_descriptor,
             sampler_descriptor,
+            handle,
         }
     }
 }
@@ -73,7 +78,7 @@ impl Node for TextureNode {
             },
             ResourceSlotInfo {
                 name: std::borrow::Cow::Borrowed("sampler"),
-                resource_type: RenderResourceType::Texture,
+                resource_type: RenderResourceType::Sampler,
             },
         ]
     }
@@ -91,6 +96,12 @@ impl Node for TextureNode {
                 .create_texture(self.texture_descriptor);
 
             output.set("texture", RenderResourceId::Texture(texture_id));
+
+            render_context.resources().set_asset_resource_untyped(
+                self.handle.clone(),
+                RenderResourceId::Texture(texture_id),
+                TEXTURE_ASSET_INDEX,
+            );
         }
 
         if output.get("sampler").is_none() {
@@ -99,6 +110,12 @@ impl Node for TextureNode {
                 .create_sampler(&self.sampler_descriptor);
 
             output.set("sampler", RenderResourceId::Sampler(sampler_id));
+
+            render_context.resources().set_asset_resource_untyped(
+                self.handle.clone(),
+                RenderResourceId::Sampler(sampler_id),
+                SAMPLER_ASSET_INDEX,
+            );
         }
     }
 }
@@ -119,7 +136,7 @@ impl<Q: WorldQuery> ShadowsNode<Q> {
             pass_descriptor: PassDescriptor {
                 color_attachments: vec![],
                 depth_stencil_attachment: Some(RenderPassDepthStencilAttachmentDescriptor {
-                    attachment: TextureAttachment::Input(SHADOW_TEXTURE.into()),
+                    attachment: TextureAttachment::Input("depth".into()),
                     depth_ops: Some(Operations {
                         load: LoadOp::Clear(1.0),
                         store: true,
@@ -138,7 +155,7 @@ where
 {
     fn input(&self) -> &[ResourceSlotInfo] {
         &[ResourceSlotInfo {
-            name: std::borrow::Cow::Borrowed(SHADOW_TEXTURE),
+            name: std::borrow::Cow::Borrowed(SHADOW_MAP_TEXTURE),
             resource_type: RenderResourceType::Texture,
         }]
     }
@@ -155,7 +172,7 @@ where
         _output: &mut ResourceSlots,
     ) {
         let shadow_texture =
-            TextureAttachment::Id(input.get(SHADOW_TEXTURE).unwrap().get_texture().unwrap());
+            TextureAttachment::Id(input.get(SHADOW_MAP_TEXTURE).unwrap().get_texture().unwrap());
         self.pass_descriptor
             .depth_stencil_attachment
             .as_mut()
@@ -167,7 +184,7 @@ where
 
         self.command_queue.execute(render_context);
 
-        let draw = self.draw.lock().unwrap();
+        let mut draw = self.draw.lock().unwrap();
         let mut draw_state = DrawState::default();
 
         render_context.begin_pass(
@@ -196,9 +213,9 @@ where
                                     instances.clone(),
                                 );
                             } else {
-                                dbg!(&draw_state);
-                                // debug!("Could not draw indexed because the pipeline layout wasn't fully set for pipeline: {:?}", draw_state.pipeline);
-                                panic!();
+                                //dbg!(&draw_state);
+                                debug!("Could not draw indexed because the pipeline layout wasn't fully set for pipeline: {:?}", draw_state.pipeline);
+                                //panic!();
                             }
                         }
                         RenderCommand::Draw {
@@ -208,9 +225,9 @@ where
                             if draw_state.can_draw() {
                                 render_pass.draw(vertices.clone(), instances.clone());
                             } else {
-                                dbg!(&draw_state);
-                                // debug!("Could not draw because the pipeline layout wasn't fully set for pipeline: {:?}", draw_state.pipeline);
-                                panic!();
+                                //dbg!(&draw_state);
+                                debug!("Could not draw because the pipeline layout wasn't fully set for pipeline: {:?}", draw_state.pipeline);
+                                //panic!();
                             }
                         }
                         RenderCommand::SetVertexBuffer {
@@ -262,6 +279,8 @@ where
                         }
                     }
                 }
+
+                draw.render_commands.clear();
             },
         )
     }
@@ -301,25 +320,30 @@ pub fn shadows_node_system(
     // TODO: this write on RenderResourceBindings will prevent this system from running in parallel with other systems that do the same
     mut render_resource_bindings: ResMut<RenderResourceBindings>,
     meshes: Res<Assets<Mesh>>,
-    mut shadow_casters: Query<(&ShadowCaster, &Handle<Mesh>, &mut RenderPipelines)>,
+    mut shadow_casters: Query<(&ShadowCaster, &Handle<Mesh>, &RenderPipelines)>,
 ) {
     let draw = state.draw.clone();
     let mut draw = draw.lock().unwrap();
 
     shadow_casters
         .iter_mut()
-        .for_each(|(_, mesh_handle, mut render_pipelines)| {
+        .for_each(|(_, mesh_handle, render_pipelines)| {
             let mesh = if let Some(mesh) = meshes.get(mesh_handle) {
                 mesh
             } else {
                 return;
             };
 
+            if let Some(binding) = render_pipelines.bindings.get("Transform") {
+                render_resource_bindings.set("Transform", binding.clone());
+            }
+
             // set up pipelinespecialzation and bindings
             // see crates\bevy_render\src\mesh\mesh.rs:502
             let mut pipeline_specialization = PipelineSpecialization::default();
             pipeline_specialization.primitive_topology = mesh.primitive_topology();
             pipeline_specialization.vertex_buffer_layout = mesh.get_vertex_buffer_layout();
+            pipeline_specialization.dynamic_bindings.insert("Transform".to_string());
             if let PrimitiveTopology::LineStrip | PrimitiveTopology::TriangleStrip =
                 mesh.primitive_topology()
             {
@@ -348,7 +372,6 @@ pub fn shadows_node_system(
                     &mut draw,
                     &mut [
                         &mut render_resource_bindings,
-                        &mut render_pipelines.bindings,
                     ],
                 )
                 .unwrap();
@@ -428,15 +451,19 @@ pub fn sun_node_system(
     mut state: Local<SunNodeState>,
     render_resource_context: Res<Box<dyn RenderResourceContext>>,
     mut render_resource_bindings: ResMut<RenderResourceBindings>,
+    mut active_cameras: ResMut<ActiveCameras>,
     query: Query<&GlobalTransform, With<Sun>>,
 ) {
     let transform = query.iter().next().unwrap();
 
-    let projection = PerspectiveProjection {
-        fov: std::f32::consts::TAU,
-        aspect_ratio: 1.0,
+    let projection = OrthographicProjection {
+        left: -25.0,
+        right: 25.0,
+        bottom: -25.0,
+        top: 25.0,
         near: 0.1,
-        far: 20.0,
+        far: 200.0,
+        ..Default::default()
     };
 
     let proj = projection.get_projection_matrix() * transform.compute_matrix().inverse();
@@ -464,6 +491,16 @@ pub fn sun_node_system(
                 dynamic_index: None,
             },
         );
+        if let Some(active_camera) = active_cameras.get_mut(base::camera::CAMERA_3D) {
+            active_camera.bindings.set(
+                "Sun",
+                RenderResourceBinding::Buffer {
+                    buffer,
+                    range: 0..size as u64,
+                    dynamic_index: None,
+                },
+            );
+        }
         state.sun_buffer = Some(buffer);
 
         let staging_buffer = render_resource_context.create_buffer(BufferInfo {
@@ -482,13 +519,78 @@ pub fn sun_node_system(
         data[matrix..matrix + vec].copy_from_slice([x, y, z].as_bytes());
     });
 
-    //let sun_buffer = if let Some()
-
     render_resource_context.unmap_buffer(staging_buffer);
     let sun_buffer = state.sun_buffer.unwrap();
     state
         .command_queue
         .copy_buffer_to_buffer(staging_buffer, 0, sun_buffer, 0, size as u64);
+}
+
+#[derive(Default)]
+pub struct ShadowMapNode {
+    texture_id: Arc<Mutex<Option<TextureId>>>,
+    sampler_id: Arc<Mutex<Option<SamplerId>>>,
+}
+
+impl Node for ShadowMapNode {
+    fn input(&self) -> &[ResourceSlotInfo] {
+        &[
+            ResourceSlotInfo {
+                name: std::borrow::Cow::Borrowed("texture"),
+                resource_type: RenderResourceType::Texture,
+            },
+            ResourceSlotInfo {
+                name: std::borrow::Cow::Borrowed("sampler"),
+                resource_type: RenderResourceType::Sampler,
+            },
+        ]
+    }
+
+    fn update(
+        &mut self,
+        _world: &World,
+        _render_context: &mut dyn RenderContext,
+        input: &ResourceSlots,
+        _output: &mut ResourceSlots,
+    ) {
+        if let Some(RenderResourceId::Texture(texture)) = input.get("texture") {
+            *self.texture_id.lock().unwrap() = Some(texture);
+        }
+
+        if let Some(RenderResourceId::Sampler(sampler)) = input.get("sampler") {
+            *self.sampler_id.lock().unwrap() = Some(sampler);
+        }
+    }
+}
+
+impl SystemNode for ShadowMapNode {
+    fn get_system(&self) -> BoxedSystem {
+        let system = shadow_map_node.system().config(|config| {
+            config.0 = Some(self.texture_id.clone());
+            config.1 = Some(self.sampler_id.clone());
+        });
+        Box::new(system)
+    }
+}
+
+pub fn shadow_map_node(
+    texture_id: Local<Arc<Mutex<Option<TextureId>>>>,
+    sampler_id: Local<Arc<Mutex<Option<SamplerId>>>>,
+    mut render_resource_bindings: ResMut<RenderResourceBindings>,
+) {
+    if let Some(texture_id) = *texture_id.lock().unwrap() {
+        render_resource_bindings.set(
+            "ShadowMapTexture",
+            RenderResourceBinding::Texture(texture_id),
+        );
+    }
+
+    if let Some(sampler_id) = *sampler_id.lock().unwrap() {
+        render_resource_bindings.set(
+            "ShadowMapSampler",
+            RenderResourceBinding::Sampler(sampler_id),
+        );
+    }
 }
 
 pub struct ShadowCaster;
@@ -521,7 +623,11 @@ impl Plugin for SunPlugin {
                 },
                 clamp_depth: false,
             }),
-            ..PipelineDescriptor::new(ShaderStages {
+            primitive: PrimitiveState {
+                cull_mode: CullMode::Front,
+                ..Default::default()
+            },
+            ..PipelineDescriptor::default_config(ShaderStages {
                 vertex: vert,
                 fragment: Some(frag),
             })
@@ -534,7 +640,7 @@ impl Plugin for SunPlugin {
             .set_untracked(SHADOW_PIPELINE_HANDLE, pipeline);
 
         let texture_descriptor = TextureDescriptor {
-            size: Extent3d::new(1024, 1024, 1),
+            size: Extent3d::new(1024 * 16, 1024 * 16, 1),
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
@@ -556,24 +662,36 @@ impl Plugin for SunPlugin {
             .unwrap();
         render_graph.add_node(
             SHADOW_TEXTURE_NODE,
-            TextureNode::new(texture_descriptor, sampler_descriptor),
+            TextureNode::new(texture_descriptor, sampler_descriptor, SHADOW_MAP_HANDLE),
         );
         render_graph.add_system_node(SUN_NODE, SunNode::default());
         render_graph.add_system_node(SHADOWS_NODE, ShadowsNode::<&ShadowCaster>::new());
+        render_graph.add_system_node(SHADOW_MAP_NODE, ShadowMapNode::default());
 
         render_graph.add_node_edge(SUN_NODE, SHADOWS_NODE).unwrap();
+        render_graph.add_node_edge(SUN_NODE, base::node::MAIN_PASS).unwrap();
 
-        /*
+        
         render_graph
-            .add_node_edge(SHADOWS_NODE, base::node::MAIN_PASS)
+            .add_node_edge(SHADOWS_NODE, SHADOW_MAP_NODE)
             .unwrap();
-        */
-
-        render_graph.add_node_edge("transform", SHADOWS_NODE).unwrap();
+        
 
         render_graph
-            .add_slot_edge(SHADOW_TEXTURE_NODE, "texture", SHADOWS_NODE, SHADOW_TEXTURE)
+            .add_node_edge(SHADOW_MAP_NODE, base::node::MAIN_PASS)
             .unwrap();
+
+        
+        render_graph
+            .add_node_edge("transform", SHADOWS_NODE)
+            .unwrap();
+        
+        render_graph
+            .add_slot_edge(SHADOW_TEXTURE_NODE, "texture", SHADOWS_NODE, SHADOW_MAP_TEXTURE)
+            .unwrap();
+
+        render_graph.add_slot_edge(SHADOW_TEXTURE_NODE, "texture", SHADOW_MAP_NODE, "texture").unwrap();
+        render_graph.add_slot_edge(SHADOW_TEXTURE_NODE, "sampler", SHADOW_MAP_NODE, "sampler").unwrap();
     }
 }
 

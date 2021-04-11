@@ -1,5 +1,5 @@
 (
-    seed: Some(5345),
+    seed: None,
     max_splits: 5,
     branches_per_split: ( start: 3, end: 4 ),
     starting_radius: 0.2,
@@ -9,7 +9,7 @@
     radius_sustain: 0.6,
     leaf_start: 3,
     leaf_size: 0.1,
-    leaf_density: 0.055,
+    leaf_density: 0.001,
     leaf_offset: 2.0,
     branch_decay: 0,
     branch_bend: 0.65,

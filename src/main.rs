@@ -19,6 +19,7 @@ fn main() {
         // system
         .add_system(character_system.system())
         .add_system(cursor_grab_system.system())
+        .add_system(plant_mesh_system.system())
         // run
         .run();
 }
@@ -36,10 +37,14 @@ fn setup(
         })
         .insert(PlayerCamera::new());
 
+
+    let mut transform = Transform::from_translation(Vec3::new(-50.0, 50.0, -50.0));
+    transform.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+
     commands
         .spawn()
         .insert(sun::Sun)
-        .insert(Transform::default())
+        .insert(transform)
         .insert(GlobalTransform::default());
 
     let mut rng = thread_rng();
@@ -53,18 +58,19 @@ fn setup(
 
         commands
             .spawn_bundle(plant::PlantBundle {
-                mesh: asset_server.load("plants/test.gno"),
                 transform,
                 ..Default::default()
             })
+            .insert(asset_server.load::<plant::Genome, _>("plants/test.gno"))
             .insert(sun::ShadowCaster);
     }
 
-    commands.spawn_bundle(PbrBundle {
-        mesh: meshes.add(shape::Plane { size: 2000.0 }.into()),
-        material: materials.add(Color::rgb_linear(155.0, 118.0, 83.0).into()),
-        ..Default::default()
-    });
+    commands
+        .spawn_bundle(plant::PlantBundle {
+            ..Default::default()
+        })
+        .insert(meshes.add(shape::Plane { size: 2000.0 }.into()))
+        .insert(sun::ShadowCaster);
 }
 
 pub struct PlayerCamera {
@@ -77,6 +83,21 @@ impl PlayerCamera {
         Self {
             head_bob: 2.0,
             state: Vec2::ZERO,
+        }
+    }
+}
+
+pub fn plant_mesh_system(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    gnomes: Res<Assets<plant::Genome>>,
+    query: Query<(Entity, &Handle<plant::Genome>), Without<Handle<Mesh>>>,
+) {
+    for (entity, genome_handle) in query.iter() {
+        if let Some(genome) = gnomes.get(genome_handle) {
+            let mesh_handle = meshes.add(genome.generate_mesh());
+
+            commands.entity(entity).insert(mesh_handle);
         }
     }
 }

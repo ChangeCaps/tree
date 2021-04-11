@@ -241,8 +241,8 @@ impl Branch {
 
             if self.split >= genome.leaf_start {
                 for vert in &ring.verts {
-                    if ctx.rng.gen_range(0.0..genome.leaf_density)
-                        < 1.0 / genome.radial_segments as f32 / genome.segments_per_branch as f32
+                    if ctx.rng.gen_range(0.0..1.0)
+                        > genome.leaf_density
                     {
                         continue;
                     }
@@ -433,7 +433,6 @@ pub struct PlantMaterial {
 
 #[derive(Bundle)]
 pub struct PlantBundle {
-    pub mesh: Handle<Mesh>,
     pub material: Handle<PlantMaterial>,
     pub main_pass: base::MainPass,
     pub draw: Draw,
@@ -446,7 +445,6 @@ pub struct PlantBundle {
 impl Default for PlantBundle {
     fn default() -> Self {
         Self {
-            mesh: Default::default(),
             material: Default::default(),
             main_pass: Default::default(),
             draw: Default::default(),
@@ -483,9 +481,7 @@ impl bevy::asset::AssetLoader for GenomeLoader {
                 ))
             })?;
 
-            let mesh = asset.generate_mesh();
-
-            load_context.set_default_asset(bevy::asset::LoadedAsset::new(mesh));
+            load_context.set_default_asset(bevy::asset::LoadedAsset::new(asset));
 
             Ok(())
         })
