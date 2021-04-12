@@ -1,10 +1,12 @@
+use crate::shadow_render_resources::*;
+use crate::sun::*;
 use bevy::{
     prelude::*,
     reflect::TypeUuid,
     render::{
         mesh::Indices,
         pipeline::{PipelineDescriptor, RenderPipeline},
-        render_graph::{base, AssetRenderResourcesNode, RenderGraph},
+        render_graph::{base, RenderGraph, RenderResourcesNode},
         renderer::RenderResources,
         shader::ShaderStages,
     },
@@ -109,7 +111,13 @@ impl Genome {
                 .collect::<Vec<[f32; 3]>>(),
         );
         mesh.set_attribute("Plant_Sway", sway);
-        mesh.set_attribute("Plant_Material", material);
+        mesh.set_attribute(
+            "Vertex_Color",
+            material
+                .into_iter()
+                .map(|v| v.into())
+                .collect::<Vec<[f32; 4]>>(),
+        );
         mesh.set_indices(Some(Indices::U32(indices)));
 
         mesh
@@ -156,7 +164,7 @@ pub struct PlantContext<'a> {
     pub vertices: &'a mut Vec<Vec3>,
     pub indices: &'a mut Vec<u32>,
     pub sway: &'a mut Vec<f32>,
-    pub material: &'a mut Vec<i32>,
+    pub material: &'a mut Vec<Color>,
     pub rng: &'a mut rand::rngs::SmallRng,
 }
 
@@ -164,7 +172,7 @@ impl PlantContext<'_> {
     pub fn add_ring(&mut self, ring: Ring) -> Vec<u32> {
         (0..ring.verts.len())
             .into_iter()
-            .for_each(|_| self.material.push(0));
+            .for_each(|_| self.material.push(Color::rgb(0.2, 0.1, 0.05)));
         ring.sway.into_iter().for_each(|s| self.sway.push(s));
         ring.verts
             .into_iter()
@@ -241,9 +249,7 @@ impl Branch {
 
             if self.split >= genome.leaf_start {
                 for vert in &ring.verts {
-                    if ctx.rng.gen_range(0.0..1.0)
-                        > genome.leaf_density
-                    {
+                    if ctx.rng.gen_range(0.0..1.0) > genome.leaf_density {
                         continue;
                     }
 
@@ -299,7 +305,7 @@ impl Branch {
                 if self.split == 0 {
                     new_direction.y += ctx.rng.gen_range(0.0..std::f32::consts::TAU);
                 } else {
-                    new_bend.y += ctx.rng.gen_range(-genome.branch_sway..genome.branch_sway);
+                    new_direction.y += ctx.rng.gen_range(-genome.branch_sway..genome.branch_sway);
                 }
 
                 if genome.branch_twist != 0.0 {
@@ -379,7 +385,9 @@ impl Leaf {
         verts.iter_mut().for_each(|v| *v = self.rot * *v);
         verts.iter_mut().for_each(|v| *v += self.pos);
 
-        (0..12).into_iter().for_each(|_| ctx.material.push(1));
+        (0..12)
+            .into_iter()
+            .for_each(|_| ctx.material.push(Color::rgb(0.2, 0.8, 0.3)));
         (0..12).into_iter().for_each(|_| ctx.sway.push(self.sway));
         let indices = verts
             .into_iter()
@@ -394,50 +402,52 @@ impl Leaf {
         ctx.indices.push(indices[2]);
 
         ctx.indices.push(indices[6]);
-        ctx.indices.push(indices[7]);
         ctx.indices.push(indices[8]);
+        ctx.indices.push(indices[7]);
 
         ctx.indices.push(indices[1]);
         ctx.indices.push(indices[3]);
         ctx.indices.push(indices[2]);
 
         ctx.indices.push(indices[7]);
-        ctx.indices.push(indices[9]);
         ctx.indices.push(indices[8]);
+        ctx.indices.push(indices[9]);
 
         ctx.indices.push(indices[4]);
         ctx.indices.push(indices[2]);
         ctx.indices.push(indices[3]);
 
         ctx.indices.push(indices[10]);
-        ctx.indices.push(indices[9]);
         ctx.indices.push(indices[8]);
+        ctx.indices.push(indices[9]);
 
         ctx.indices.push(indices[3]);
         ctx.indices.push(indices[5]);
         ctx.indices.push(indices[4]);
 
         ctx.indices.push(indices[8]);
-        ctx.indices.push(indices[9]);
         ctx.indices.push(indices[11]);
+        ctx.indices.push(indices[9]);
 
         indices
     }
 }
 
-#[derive(RenderResources, TypeUuid)]
+#[derive(Default, RenderResources, TypeUuid)]
 #[uuid = "5739c0cc-eefb-4e41-b2fc-0e8d937fcff7"]
 pub struct PlantMaterial {
     pub time: f32,
+    pub growth: f32,
 }
 
 #[derive(Bundle)]
 pub struct PlantBundle {
-    pub material: Handle<PlantMaterial>,
+    pub material: PlantMaterial,
     pub main_pass: base::MainPass,
     pub draw: Draw,
     pub visible: Visible,
     pub render_pipelines: RenderPipelines,
+    pub shadow_caster: ShadowCaster,
     pub transform: Transform,
     pub global_transform: GlobalTransform,
 }
@@ -452,15 +462,18 @@ impl Default for PlantBundle {
             render_pipelines: RenderPipelines::from_pipelines(vec![RenderPipeline::new(
                 PIPELINE.typed(),
             )]),
+            shadow_caster: ShadowCaster::new(RenderPipelines::from_pipelines(vec![
+                RenderPipeline::new(SHADOW_PIPELINE.typed()),
+            ])),
             transform: Default::default(),
             global_transform: Default::default(),
         }
     }
 }
 
-pub fn plant_material_system(time: Res<Time>, mut plant_materials: ResMut<Assets<PlantMaterial>>) {
-    for id in plant_materials.ids().collect::<Vec<_>>() {
-        plant_materials.get_mut(id).unwrap().time = time.seconds_since_startup() as f32;
+pub fn plant_material_system(time: Res<Time>, mut query: Query<&mut PlantMaterial>) {
+    for mut plant_material in query.iter_mut() {
+        plant_material.time += time.delta_seconds();
     }
 }
 
@@ -494,6 +507,8 @@ impl bevy::asset::AssetLoader for GenomeLoader {
 
 pub const PIPELINE: HandleUntyped =
     HandleUntyped::weak_from_u64(PipelineDescriptor::TYPE_UUID, 562348753649);
+pub const SHADOW_PIPELINE: HandleUntyped =
+    HandleUntyped::weak_from_u64(PipelineDescriptor::TYPE_UUID, 69349823467);
 
 pub struct PlantPlugin;
 
@@ -517,14 +532,13 @@ impl Plugin for PlantPlugin {
             })
         };
 
-        app_builder
-            .world_mut()
-            .get_resource_mut::<Assets<PlantMaterial>>()
-            .unwrap()
-            .set_untracked(
-                Handle::<PlantMaterial>::default(),
-                PlantMaterial { time: 0.0 },
-            );
+        let vert = asset_server.load("shaders/plant_shadow.vert");
+        let frag = asset_server.load("shaders/plant_shadow.frag");
+
+        let shadow_pipeline = shadow_pipeline(ShaderStages {
+            vertex: vert,
+            fragment: Some(frag),
+        });
 
         app_builder
             .world_mut()
@@ -532,14 +546,28 @@ impl Plugin for PlantPlugin {
             .unwrap()
             .set_untracked(PIPELINE, pipeline);
 
+        app_builder
+            .world_mut()
+            .get_resource_mut::<Assets<PipelineDescriptor>>()
+            .unwrap()
+            .set_untracked(SHADOW_PIPELINE, shadow_pipeline);
+
         let mut render_graph = app_builder
             .world_mut()
             .get_resource_mut::<RenderGraph>()
             .unwrap();
 
         render_graph.add_system_node(
+            "plant_shadow_material",
+            ShadowRenderResourcesNode::<PlantMaterial>::new(true),
+        );
+        render_graph
+            .add_node_edge("plant_shadow_material", SHADOWS_NODE)
+            .unwrap();
+
+        render_graph.add_system_node(
             "plant_material",
-            AssetRenderResourcesNode::<PlantMaterial>::new(true),
+            RenderResourcesNode::<PlantMaterial>::new(true),
         );
         render_graph
             .add_node_edge("plant_material", base::node::MAIN_PASS)

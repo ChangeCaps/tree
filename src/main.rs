@@ -1,18 +1,20 @@
 mod plant;
 mod ron_loader;
+mod shadow_render_resources;
+mod sky;
 mod sun;
 
 use bevy::prelude::*;
-use bevy::render::camera::PerspectiveProjection;
 use rand::prelude::*;
 
 fn main() {
     App::build()
         .insert_resource(Msaa { samples: 8 })
+        .insert_resource(ClearColor(Color::rgba(0.0, 0.0, 0.0, 0.0)))
         // plugins
-        .add_plugins(DefaultPlugins)
-        .add_plugin(plant::PlantPlugin)
+        .add_plugins(sky::Plugins)
         .add_plugin(sun::SunPlugin)
+        .add_plugin(plant::PlantPlugin)
         // startup systems
         .add_startup_system(setup.system())
         .add_startup_system(bevy_mod_debugdump::print_render_graph.system())
@@ -20,32 +22,40 @@ fn main() {
         .add_system(character_system.system())
         .add_system(cursor_grab_system.system())
         .add_system(plant_mesh_system.system())
+        .add_system(plant_growth_system.system())
         // run
         .run();
 }
 
-fn setup(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    asset_server: Res<AssetServer>,
-) {
-    commands
+fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, asset_server: Res<AssetServer>) {
+    let player = commands
+        .spawn()
+        .insert(Player {
+
+        })
+        .insert(Transform::from_translation(Vec3::new(0.0, 0.0, 15.0)))
+        .insert(GlobalTransform::default())
+        .id();
+
+    let _player_camera = commands
         .spawn_bundle(PerspectiveCameraBundle {
-            transform: Transform::from_translation(Vec3::new(0.0, 2.0, 15.0)),
+            transform: Transform::from_translation(Vec3::new(0.0, 2.0, 0.0)),
             ..PerspectiveCameraBundle::new_3d()
         })
-        .insert(PlayerCamera::new());
-
+        .insert(PlayerCamera::new())
+        .insert(Parent(player))
+        .id();
 
     let mut transform = Transform::from_translation(Vec3::new(-50.0, 50.0, -50.0));
     transform.look_at(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
 
-    commands
+    let _sun = commands
         .spawn()
         .insert(sun::Sun)
         .insert(transform)
-        .insert(GlobalTransform::default());
+        .insert(GlobalTransform::default())
+        .insert(Parent(player))
+        .id();
 
     let mut rng = thread_rng();
 
@@ -53,7 +63,7 @@ fn setup(
         let x = rng.gen_range(-20.0..20.0);
         let z = rng.gen_range(-20.0..20.0);
 
-        let mut transform = Transform::from_translation(Vec3::new(x, 0.0, z));
+        let mut transform = Transform::from_translation(Vec3::new(x, -0.1, z));
         transform.rotation = Quat::from_rotation_y(rng.gen_range(0.0..std::f32::consts::TAU));
 
         commands
@@ -61,16 +71,29 @@ fn setup(
                 transform,
                 ..Default::default()
             })
-            .insert(asset_server.load::<plant::Genome, _>("plants/test.gno"))
-            .insert(sun::ShadowCaster);
+            .insert(asset_server.load::<plant::Genome, _>("plants/test.gno"));
     }
 
-    commands
-        .spawn_bundle(plant::PlantBundle {
-            ..Default::default()
-        })
-        .insert(meshes.add(shape::Plane { size: 2000.0 }.into()))
-        .insert(sun::ShadowCaster);
+    commands.spawn_bundle(MeshBundle {
+        mesh: bevy::sprite::QUAD_HANDLE.typed(),
+        render_pipelines: RenderPipelines::from_pipelines(vec![
+            bevy::render::pipeline::RenderPipeline::new(sky::SKY_PIPELINE.typed()),
+        ]),
+        ..Default::default()
+    });
+
+    commands.spawn_bundle(sky::PostBundle {
+        ..Default::default()
+    });
+
+    commands.spawn_bundle(sun::ShadedBundle {
+        mesh: meshes.add(shape::Plane { size: 2000.0 }.into()),
+        ..Default::default()
+    });
+}
+
+pub struct Player {
+    //camera
 }
 
 pub struct PlayerCamera {
@@ -84,6 +107,12 @@ impl PlayerCamera {
             head_bob: 2.0,
             state: Vec2::ZERO,
         }
+    }
+}
+
+pub fn plant_growth_system(time: Res<Time>, mut query: Query<&mut plant::PlantMaterial>) {
+    for mut plant_material in query.iter_mut() {
+        plant_material.growth += time.delta_seconds() * 0.15;
     }
 }
 
@@ -125,7 +154,9 @@ pub fn character_system(
     input: Res<Input<KeyCode>>,
     time: Res<Time>,
     windows: Res<Windows>,
-    mut query: Query<(&mut Transform, &mut PlayerCamera)>,
+    mut camera_query: Query<(Entity, &mut PlayerCamera), With<Transform>>,
+    player_query: Query<(Entity, &Player, &Children), With<Transform>>,
+    mut transform_query: Query<&mut Transform>,
 ) {
     for event in mouse_events.iter() {
         let window = windows.get_primary().unwrap();
@@ -134,7 +165,9 @@ pub fn character_system(
             continue;
         }
 
-        for (mut transform, mut camera) in query.iter_mut() {
+        for (entity, mut camera) in camera_query.iter_mut() {
+            let mut transform = transform_query.get_mut(entity).unwrap();
+
             let delta = -event.delta * 0.0005;
             camera.state += delta;
             let rotation = Quat::from_rotation_ypr(camera.state.x, camera.state.y, 0.0);
@@ -143,38 +176,52 @@ pub fn character_system(
         }
     }
 
-    for (mut transform, mut camera) in query.iter_mut() {
+    for (entity, camera) in camera_query.iter_mut() {
+        let mut transform = transform_query.get_mut(entity).unwrap();
+
         transform.translation.y = 2.0 + (camera.head_bob.cos() - 1.0) * 0.02;
+    }
+
+    for (entity, _player, children) in player_query.iter() {
+        let transform = transform_query.get_mut(children[0]).unwrap();
+
+        let rotation_matrix = transform.rotation.clone();
+
+        let mut transform = transform_query.get_mut(entity).unwrap();
 
         let mut movement = Vec3::ZERO;
 
         if input.pressed(KeyCode::W) {
-            let dir = transform.rotation * -Vec3::Z;
+            let dir = -Vec3::Z;
 
             movement += dir;
         }
 
         if input.pressed(KeyCode::S) {
-            let dir = transform.rotation * Vec3::Z;
+            let dir = Vec3::Z;
 
             movement += dir;
         }
 
         if input.pressed(KeyCode::A) {
-            let dir = transform.rotation * -Vec3::X;
+            let dir = -Vec3::X;
 
             movement += dir;
         }
 
         if input.pressed(KeyCode::D) {
-            let dir = transform.rotation * Vec3::X;
+            let dir = Vec3::X;
 
             movement += dir;
         }
 
-        movement.y = 0.0;
         if movement.length() > 0.0 {
+            movement = rotation_matrix * movement;
+            movement.y = 0.0;
+
             transform.translation += movement.normalize() * time.delta_seconds() * 1.5;
+
+            let (_, mut camera) = camera_query.get_mut(children[0]).unwrap();
 
             camera.head_bob += time.delta_seconds() * 10.0;
         }

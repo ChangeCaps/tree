@@ -7,7 +7,7 @@ use bevy::{
     prelude::*,
     reflect::TypeUuid,
     render::{
-        camera::{CameraProjection, PerspectiveProjection, OrthographicProjection, ActiveCameras},
+        camera::{ActiveCameras, CameraProjection, OrthographicProjection, PerspectiveProjection},
         draw::{DrawContext, RenderCommand},
         mesh::{Indices, INDEX_BUFFER_ASSET_INDEX, VERTEX_ATTRIBUTE_BUFFER_ID},
         pass::{
@@ -16,9 +16,9 @@ use bevy::{
         },
         pipeline::{
             BlendFactor, BlendOperation, BlendState, ColorTargetState, ColorWrite, CompareFunction,
-            DepthBiasState, DepthStencilState, IndexFormat, MultisampleState, PipelineDescriptor,
-            PipelineSpecialization, PrimitiveTopology, RenderPipeline, StencilFaceState,
-            StencilState, PrimitiveState, CullMode,
+            CullMode, DepthBiasState, DepthStencilState, IndexFormat, MultisampleState,
+            PipelineDescriptor, PipelineSpecialization, PrimitiveState, PrimitiveTopology,
+            RenderPipeline, StencilFaceState, StencilState,
         },
         render_graph::{
             base, AssetRenderResourcesNode, CameraNode, CommandQueue, Node, PassNode, RenderGraph,
@@ -32,22 +32,27 @@ use bevy::{
         shader::ShaderStages,
         texture::{
             AddressMode, Extent3d, FilterMode, SamplerDescriptor, TextureDescriptor,
-            TextureDimension, TextureFormat, TextureUsage, TEXTURE_ASSET_INDEX, SAMPLER_ASSET_INDEX,
+            TextureDimension, TextureFormat, TextureUsage, SAMPLER_ASSET_INDEX,
+            TEXTURE_ASSET_INDEX,
         },
     },
+    utils::HashSet,
 };
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
-const SUN_NODE: &str = "sun_node";
-const SHADOW_MAP_HANDLE: HandleUntyped = HandleUntyped::weak_from_u64(Texture::TYPE_UUID, 16478324);
-const SHADOW_MAP_NODE: &str = "shadow_map_node";
-const SHADOW_MAP_TEXTURE: &str = "shadow_map_texture";
-const SHADOW_MAP_SAMPLER: &str = "shadow_map_sampler";
-const SHADOWS_NODE: &str = "shadows_node";
-const SHADOW_TEXTURE_NODE: &str = "shadow_texture_node";
-const SHADOW_PIPELINE_HANDLE: HandleUntyped =
+pub const SUN_NODE: &str = "sun_node";
+pub const SHADOW_MAP_HANDLE: HandleUntyped =
+    HandleUntyped::weak_from_u64(Texture::TYPE_UUID, 16478324);
+pub const SHADOW_MAP_NODE: &str = "shadow_map_node";
+pub const SHADOW_MAP_TEXTURE: &str = "shadow_map_texture";
+pub const SHADOW_MAP_SAMPLER: &str = "shadow_map_sampler";
+pub const SHADOWS_NODE: &str = "shadows_node";
+pub const SHADOW_TEXTURE_NODE: &str = "shadow_texture_node";
+pub const SHADOW_PIPELINE_HANDLE: HandleUntyped =
     HandleUntyped::weak_from_u64(PipelineDescriptor::TYPE_UUID, 5437868423);
+pub const SHADED_PIPELINE_HANDLE: HandleUntyped =
+    HandleUntyped::weak_from_u64(PipelineDescriptor::TYPE_UUID, 53849761);
 
 pub struct TextureNode {
     texture_descriptor: TextureDescriptor,
@@ -59,7 +64,7 @@ impl TextureNode {
     pub fn new(
         texture_descriptor: TextureDescriptor,
         sampler_descriptor: SamplerDescriptor,
-        handle: HandleUntyped
+        handle: HandleUntyped,
     ) -> Self {
         Self {
             texture_descriptor,
@@ -171,8 +176,13 @@ where
         input: &ResourceSlots,
         _output: &mut ResourceSlots,
     ) {
-        let shadow_texture =
-            TextureAttachment::Id(input.get(SHADOW_MAP_TEXTURE).unwrap().get_texture().unwrap());
+        let shadow_texture = TextureAttachment::Id(
+            input
+                .get(SHADOW_MAP_TEXTURE)
+                .unwrap()
+                .get_texture()
+                .unwrap(),
+        );
         self.pass_descriptor
             .depth_stencil_attachment
             .as_mut()
@@ -320,30 +330,55 @@ pub fn shadows_node_system(
     // TODO: this write on RenderResourceBindings will prevent this system from running in parallel with other systems that do the same
     mut render_resource_bindings: ResMut<RenderResourceBindings>,
     meshes: Res<Assets<Mesh>>,
-    mut shadow_casters: Query<(&ShadowCaster, &Handle<Mesh>, &RenderPipelines)>,
+    mut shadow_casters: Query<(&mut ShadowCaster, &Handle<Mesh>)>,
 ) {
     let draw = state.draw.clone();
     let mut draw = draw.lock().unwrap();
 
     shadow_casters
         .iter_mut()
-        .for_each(|(_, mesh_handle, render_pipelines)| {
+        .for_each(|(mut shadow_caster, mesh_handle)| {
             let mesh = if let Some(mesh) = meshes.get(mesh_handle) {
                 mesh
             } else {
                 return;
             };
 
-            if let Some(binding) = render_pipelines.bindings.get("Transform") {
-                render_resource_bindings.set("Transform", binding.clone());
+            let render_pipelines = &mut shadow_caster.render_pipelines;
+            for pipeline in render_pipelines.pipelines.iter_mut() {
+                if pipeline.dynamic_bindings_generation
+                    != render_pipelines.bindings.dynamic_bindings_generation()
+                {
+                    pipeline.specialization.dynamic_bindings = render_pipelines
+                        .bindings
+                        .iter_dynamic_bindings()
+                        .map(|name| name.to_string())
+                        .collect::<HashSet<String>>();
+
+                    pipeline.dynamic_bindings_generation =
+                        render_pipelines.bindings.dynamic_bindings_generation();
+
+                    for (handle, _) in render_pipelines.bindings.iter_assets() {
+                        if let Some(bindings) = draw_context
+                            .asset_render_resource_bindings
+                            .get_untyped(handle)
+                        {
+                            for binding in bindings.iter_dynamic_bindings() {
+                                pipeline
+                                    .specialization
+                                    .dynamic_bindings
+                                    .insert(binding.to_string());
+                            }
+                        }
+                    }
+                }
             }
 
             // set up pipelinespecialzation and bindings
             // see crates\bevy_render\src\mesh\mesh.rs:502
-            let mut pipeline_specialization = PipelineSpecialization::default();
+            let mut pipeline_specialization = render_pipelines.pipelines[0].specialization.clone();
             pipeline_specialization.primitive_topology = mesh.primitive_topology();
             pipeline_specialization.vertex_buffer_layout = mesh.get_vertex_buffer_layout();
-            pipeline_specialization.dynamic_bindings.insert("Transform".to_string());
             if let PrimitiveTopology::LineStrip | PrimitiveTopology::TriangleStrip =
                 mesh.primitive_topology()
             {
@@ -354,7 +389,7 @@ pub fn shadows_node_system(
             draw_context
                 .set_pipeline(
                     &mut draw,
-                    &SHADOW_PIPELINE_HANDLE.typed(),
+                    &render_pipelines.pipelines[0].pipeline,
                     &pipeline_specialization,
                 )
                 .unwrap();
@@ -372,6 +407,7 @@ pub fn shadows_node_system(
                     &mut draw,
                     &mut [
                         &mut render_resource_bindings,
+                        &mut render_pipelines.bindings,
                     ],
                 )
                 .unwrap();
@@ -593,7 +629,82 @@ pub fn shadow_map_node(
     }
 }
 
-pub struct ShadowCaster;
+#[derive(Bundle)]
+pub struct ShadedBundle {
+    pub mesh: Handle<Mesh>,
+    pub draw: Draw,
+    pub visible: Visible,
+    pub main_pass: base::MainPass,
+    pub shadow_caster: ShadowCaster,
+    pub render_pipelines: RenderPipelines,
+    pub transform: Transform,
+    pub global_transform: GlobalTransform,
+}
+
+impl Default for ShadedBundle {
+    fn default() -> Self {
+        Self {
+            mesh: Default::default(),
+            draw: Default::default(),
+            visible: Default::default(),
+            main_pass: base::MainPass,
+            shadow_caster: ShadowCaster::default(),
+            render_pipelines: RenderPipelines::from_pipelines(vec![RenderPipeline::new(
+                SHADED_PIPELINE_HANDLE.typed(),
+            )]),
+            transform: Default::default(),
+            global_transform: Default::default(),
+        }
+    }
+}
+
+pub struct ShadowCaster {
+    pub render_pipelines: RenderPipelines,
+}
+
+impl ShadowCaster {
+    pub fn new(render_pipelines: RenderPipelines) -> Self {
+        Self { render_pipelines }
+    }
+}
+
+impl Default for ShadowCaster {
+    fn default() -> Self {
+        Self {
+            render_pipelines: RenderPipelines::from_pipelines(vec![RenderPipeline::new(
+                SHADOW_PIPELINE_HANDLE.typed(),
+            )]),
+        }
+    }
+}
+
+pub fn shadow_pipeline(shader_stages: ShaderStages) -> PipelineDescriptor {
+    PipelineDescriptor {
+        color_target_states: vec![],
+        depth_stencil: Some(DepthStencilState {
+            format: TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: CompareFunction::Less,
+            stencil: StencilState {
+                front: StencilFaceState::IGNORE,
+                back: StencilFaceState::IGNORE,
+                read_mask: 0,
+                write_mask: 0,
+            },
+            bias: DepthBiasState {
+                constant: 0,
+                slope_scale: 0.0,
+                clamp: 0.0,
+            },
+            clamp_depth: false,
+        }),
+        primitive: PrimitiveState {
+            cull_mode: CullMode::Front,
+            ..Default::default()
+        },
+        ..PipelineDescriptor::default_config(shader_stages)
+    }
+}
 
 pub struct SunPlugin;
 
@@ -604,40 +715,30 @@ impl Plugin for SunPlugin {
         let vert: Handle<Shader> = asset_server.load("shaders/shadow.vert");
         let frag: Handle<Shader> = asset_server.load("shaders/shadow.frag");
 
-        let pipeline = PipelineDescriptor {
-            color_target_states: vec![],
-            depth_stencil: Some(DepthStencilState {
-                format: TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: CompareFunction::Less,
-                stencil: StencilState {
-                    front: StencilFaceState::IGNORE,
-                    back: StencilFaceState::IGNORE,
-                    read_mask: 0,
-                    write_mask: 0,
-                },
-                bias: DepthBiasState {
-                    constant: 0,
-                    slope_scale: 0.0,
-                    clamp: 0.0,
-                },
-                clamp_depth: false,
-            }),
-            primitive: PrimitiveState {
-                cull_mode: CullMode::Front,
-                ..Default::default()
-            },
-            ..PipelineDescriptor::default_config(ShaderStages {
-                vertex: vert,
-                fragment: Some(frag),
-            })
-        };
+        let shadow_pipeline = shadow_pipeline(ShaderStages {
+            vertex: vert,
+            fragment: Some(frag),
+        });
+
+        let vert: Handle<Shader> = asset_server.load("shaders/shaded.vert");
+        let frag: Handle<Shader> = asset_server.load("shaders/shaded.frag");
+
+        let shaded_pipeline = PipelineDescriptor::default_config(ShaderStages {
+            vertex: vert,
+            fragment: Some(frag),
+        });
 
         app_builder
             .world_mut()
             .get_resource_mut::<Assets<PipelineDescriptor>>()
             .unwrap()
-            .set_untracked(SHADOW_PIPELINE_HANDLE, pipeline);
+            .set_untracked(SHADOW_PIPELINE_HANDLE, shadow_pipeline);
+
+        app_builder
+            .world_mut()
+            .get_resource_mut::<Assets<PipelineDescriptor>>()
+            .unwrap()
+            .set_untracked(SHADED_PIPELINE_HANDLE, shaded_pipeline);
 
         let texture_descriptor = TextureDescriptor {
             size: Extent3d::new(1024 * 16, 1024 * 16, 1),
@@ -651,8 +752,9 @@ impl Plugin for SunPlugin {
             address_mode_u: AddressMode::ClampToEdge,
             address_mode_v: AddressMode::ClampToEdge,
             address_mode_w: AddressMode::ClampToEdge,
-            mag_filter: FilterMode::Nearest,
-            min_filter: FilterMode::Nearest,
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            mipmap_filter: FilterMode::Nearest,
             ..Default::default()
         };
 
@@ -667,31 +769,46 @@ impl Plugin for SunPlugin {
         render_graph.add_system_node(SUN_NODE, SunNode::default());
         render_graph.add_system_node(SHADOWS_NODE, ShadowsNode::<&ShadowCaster>::new());
         render_graph.add_system_node(SHADOW_MAP_NODE, ShadowMapNode::default());
+        render_graph.add_system_node(
+            "shadow_transform",
+            crate::shadow_render_resources::ShadowRenderResourcesNode::<GlobalTransform>::new(true),
+        );
 
+        render_graph
+            .add_node_edge("shadow_transform", SHADOWS_NODE)
+            .unwrap();
         render_graph.add_node_edge(SUN_NODE, SHADOWS_NODE).unwrap();
-        render_graph.add_node_edge(SUN_NODE, base::node::MAIN_PASS).unwrap();
+        render_graph
+            .add_node_edge(SUN_NODE, base::node::MAIN_PASS)
+            .unwrap();
 
-        
         render_graph
             .add_node_edge(SHADOWS_NODE, SHADOW_MAP_NODE)
             .unwrap();
-        
 
         render_graph
             .add_node_edge(SHADOW_MAP_NODE, base::node::MAIN_PASS)
             .unwrap();
 
-        
         render_graph
             .add_node_edge("transform", SHADOWS_NODE)
             .unwrap();
-        
+
         render_graph
-            .add_slot_edge(SHADOW_TEXTURE_NODE, "texture", SHADOWS_NODE, SHADOW_MAP_TEXTURE)
+            .add_slot_edge(
+                SHADOW_TEXTURE_NODE,
+                "texture",
+                SHADOWS_NODE,
+                SHADOW_MAP_TEXTURE,
+            )
             .unwrap();
 
-        render_graph.add_slot_edge(SHADOW_TEXTURE_NODE, "texture", SHADOW_MAP_NODE, "texture").unwrap();
-        render_graph.add_slot_edge(SHADOW_TEXTURE_NODE, "sampler", SHADOW_MAP_NODE, "sampler").unwrap();
+        render_graph
+            .add_slot_edge(SHADOW_TEXTURE_NODE, "texture", SHADOW_MAP_NODE, "texture")
+            .unwrap();
+        render_graph
+            .add_slot_edge(SHADOW_TEXTURE_NODE, "sampler", SHADOW_MAP_NODE, "sampler")
+            .unwrap();
     }
 }
 

@@ -1,11 +1,8 @@
 #version 450
 
 layout(location = 0) in vec3 v_Normal;
-layout(location = 1) in vec3 v_Color;
-layout(location = 2) in vec3 v_ModelPos;
-layout(location = 3) in vec3 v_WorldPos;
-layout(location = 4) in vec4 v_ShadowCoord;
-layout(location = 5) in float v_Sway;
+layout(location = 1) in vec3 v_WorldPos;
+layout(location = 2) in vec4 v_ShadowCoord;
 
 layout(location = 0) out vec4 o_Target;
 
@@ -14,12 +11,8 @@ layout(set = 0, binding = 1) uniform Sun {
     vec3 SunPos;
 };
 
-layout(set = 2, binding = 1) uniform PlantMaterial_growth {
-    float Growth;
-};
-
-layout(set = 3, binding = 0) uniform texture2D ShadowMapTexture;
-layout(set = 3, binding = 1) uniform sampler ShadowMapSampler;
+layout(set = 2, binding = 0) uniform texture2D ShadowMapTexture;
+layout(set = 2, binding = 1) uniform sampler ShadowMapSampler;
 
 float calculateShadow(in vec2 uv, in float dist, in float bias) {
     float depth = texture(sampler2D(ShadowMapTexture, ShadowMapSampler), uv).x;
@@ -32,12 +25,6 @@ float calculateShadow(in vec2 uv, in float dist, in float bias) {
 }
 
 void main() {
-    float dither = length(sin(v_ModelPos * 50.0)) - (Growth - v_Sway) * 4.0 + 0.5;
-
-    if (Growth < v_Sway || dither > 0.9) {
-        discard;
-    }
-
     vec3 s = v_ShadowCoord.xyz / v_ShadowCoord.w;
     s.y *= -1.0;
 
@@ -53,15 +40,15 @@ void main() {
 
     float shadow = 0.0;
 
-    for (int x = -3; x <= 3; x++) {
-        for (int y = -3; y <= 3; y++) {
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
             vec2 offset = vec2(x, y) * texel_size;
 
             shadow += calculateShadow(s.xy * 0.5 + 0.5 + offset, dist, bias);
         }
     }
 
-    shadow /= 49.0;
+    shadow /= 9.0;
 
     float sun_diffuse = clamp(dot(v_Normal, normalize(world_to_sun)), 0.0, 1.0);
     float sky_diffuse = sqrt(clamp(0.5 + 0.5 * v_Normal.y, 0.0, 1.0));
@@ -72,7 +59,7 @@ void main() {
     light += vec3(8.1, 6.0, 4.2) * (1.0 - shadow) * sun_diffuse * 0.2;
     light += vec3(0.5, 0.7, 1.0) * sky_diffuse;
 
-    vec3 color = v_Color;
+    vec3 color = vec3(1.0);
 
     color = color * light;
 
