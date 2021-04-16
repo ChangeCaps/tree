@@ -201,15 +201,15 @@ where
             &self.pass_descriptor,
             render_resource_bindings,
             &mut |render_pass| {
-                for render_command in draw.render_commands.iter() {
+                for render_command in draw.render_commands.drain(..) {
                     match render_command {
                         RenderCommand::SetPipeline { pipeline } => {
                             if draw_state.is_pipeline_set(pipeline.clone_weak()) {
                                 continue;
                             }
-                            render_pass.set_pipeline(pipeline);
-                            let descriptor = pipelines.get(pipeline).unwrap();
-                            draw_state.set_pipeline(pipeline, descriptor);
+                            render_pass.set_pipeline(&pipeline);
+                            let descriptor = pipelines.get(&pipeline).unwrap();
+                            draw_state.set_pipeline(&pipeline, descriptor);
                         }
                         RenderCommand::DrawIndexed {
                             base_vertex,
@@ -219,7 +219,7 @@ where
                             if draw_state.can_draw_indexed() {
                                 render_pass.draw_indexed(
                                     indices.clone(),
-                                    *base_vertex,
+                                    base_vertex,
                                     instances.clone(),
                                 );
                             } else {
@@ -245,22 +245,22 @@ where
                             offset,
                             slot,
                         } => {
-                            if draw_state.is_vertex_buffer_set(*slot, *buffer, *offset) {
+                            if draw_state.is_vertex_buffer_set(slot, buffer, offset) {
                                 continue;
                             }
-                            render_pass.set_vertex_buffer(*slot, *buffer, *offset);
-                            draw_state.set_vertex_buffer(*slot, *buffer, *offset);
+                            render_pass.set_vertex_buffer(slot, buffer, offset);
+                            draw_state.set_vertex_buffer(slot, buffer, offset);
                         }
                         RenderCommand::SetIndexBuffer {
                             buffer,
                             offset,
                             index_format,
                         } => {
-                            if draw_state.is_index_buffer_set(*buffer, *offset, *index_format) {
+                            if draw_state.is_index_buffer_set(buffer, offset, index_format) {
                                 continue;
                             }
-                            render_pass.set_index_buffer(*buffer, *offset, *index_format);
-                            draw_state.set_index_buffer(*buffer, *offset, *index_format);
+                            render_pass.set_index_buffer(buffer, offset, index_format);
+                            draw_state.set_index_buffer(buffer, offset, index_format);
                         }
                         RenderCommand::SetBindGroup {
                             index,
@@ -268,7 +268,7 @@ where
                             dynamic_uniform_indices,
                         } => {
                             if dynamic_uniform_indices.is_none()
-                                && draw_state.is_bind_group_set(*index, *bind_group)
+                                && draw_state.is_bind_group_set(index, bind_group)
                             {
                                 continue;
                             }
@@ -276,21 +276,19 @@ where
                                 .get(draw_state.pipeline.as_ref().unwrap())
                                 .unwrap();
                             let layout = pipeline.get_layout().unwrap();
-                            let bind_group_descriptor = layout.get_bind_group(*index).unwrap();
+                            let bind_group_descriptor = layout.get_bind_group(index).unwrap();
                             render_pass.set_bind_group(
-                                *index,
+                                index,
                                 bind_group_descriptor.id,
-                                *bind_group,
+                                bind_group,
                                 dynamic_uniform_indices
                                     .as_ref()
                                     .map(|indices| indices.deref()),
                             );
-                            draw_state.set_bind_group(*index, *bind_group);
+                            draw_state.set_bind_group(index, bind_group);
                         }
                     }
                 }
-
-                draw.render_commands.clear();
             },
         )
     }
@@ -493,10 +491,10 @@ pub fn sun_node_system(
     let transform = query.iter().next().unwrap();
 
     let projection = OrthographicProjection {
-        left: -25.0,
-        right: 25.0,
-        bottom: -25.0,
-        top: 25.0,
+        left: -50.0,
+        right: 50.0,
+        bottom: -50.0,
+        top: 50.0,
         near: 0.1,
         far: 200.0,
         ..Default::default()
@@ -682,7 +680,7 @@ pub fn shadow_pipeline(shader_stages: ShaderStages) -> PipelineDescriptor {
     PipelineDescriptor {
         color_target_states: vec![],
         depth_stencil: Some(DepthStencilState {
-            format: TextureFormat::Depth32Float,
+            format: TextureFormat::Depth24Plus,
             depth_write_enabled: true,
             depth_compare: CompareFunction::Less,
             stencil: StencilState {
@@ -741,11 +739,11 @@ impl Plugin for SunPlugin {
             .set_untracked(SHADED_PIPELINE_HANDLE, shaded_pipeline);
 
         let texture_descriptor = TextureDescriptor {
-            size: Extent3d::new(1024 * 16, 1024 * 16, 1),
+            size: Extent3d::new(1024 * 8, 1024 * 8, 1),
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
-            format: TextureFormat::Depth32Float,
+            format: TextureFormat::Depth24Plus,
             usage: TextureUsage::OUTPUT_ATTACHMENT | TextureUsage::SAMPLED,
         };
         let sampler_descriptor = SamplerDescriptor {

@@ -4,6 +4,8 @@ layout(location = 0) in vec3 Vertex_Position;
 layout(location = 1) in vec3 Vertex_Normal;
 layout(location = 2) in vec4 Vertex_Color;
 layout(location = 3) in float Plant_Sway;
+layout(location = 4) in vec2 Vertex_Uv;
+layout(location = 5) in uint Plant_Material;
 
 layout(location = 0) out vec3 v_Normal;
 layout(location = 1) out vec3 v_Color;
@@ -11,6 +13,8 @@ layout(location = 2) out vec3 v_ModelPos;
 layout(location = 3) out vec3 v_WorldPos;
 layout(location = 4) out vec4 v_ShadowCoord;
 layout(location = 5) out float v_Sway;
+layout(location = 6) out vec2 v_Uv; 
+layout(location = 7) out uint v_Material;
 
 layout(set = 0, binding = 0) uniform CameraViewProj {
     mat4 ViewProj;
@@ -47,4 +51,6 @@ void main() {
     v_ShadowCoord = SunViewProj * vec4(world_position, 1.0);
     v_Sway = Plant_Sway;
     v_ModelPos = Vertex_Position;
+    v_Uv = Vertex_Uv;
+    v_Material = Plant_Material;
 }

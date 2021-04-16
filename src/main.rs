@@ -3,14 +3,19 @@ mod ron_loader;
 mod shadow_render_resources;
 mod sky;
 mod sun;
+mod terrain;
 
 use bevy::prelude::*;
 use rand::prelude::*;
 
 fn main() {
     App::build()
-        .insert_resource(Msaa { samples: 8 })
+        .insert_resource(Msaa { samples: 4 })
         .insert_resource(ClearColor(Color::rgba(0.0, 0.0, 0.0, 0.0)))
+        .insert_resource(WindowDescriptor {
+            vsync: false,
+            ..Default::default()
+        })
         // plugins
         .add_plugins(sky::Plugins)
         .add_plugin(sun::SunPlugin)
@@ -23,6 +28,7 @@ fn main() {
         .add_system(cursor_grab_system.system())
         .add_system(plant_mesh_system.system())
         .add_system(plant_growth_system.system())
+        .add_system(terrain::terrain_system.system())
         // run
         .run();
 }
@@ -30,10 +36,8 @@ fn main() {
 fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, asset_server: Res<AssetServer>) {
     let player = commands
         .spawn()
-        .insert(Player {
-
-        })
-        .insert(Transform::from_translation(Vec3::new(0.0, 0.0, 15.0)))
+        .insert(Player {})
+        .insert(Transform::from_translation(Vec3::new(0.0, 0.0, 0.0)))
         .insert(GlobalTransform::default())
         .id();
 
@@ -59,19 +63,25 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, asset_server:
 
     let mut rng = thread_rng();
 
-    for _ in 0..50 {
-        let x = rng.gen_range(-20.0..20.0);
-        let z = rng.gen_range(-20.0..20.0);
+    for x in -6..6 {
+        for z in -6..6 {
+            let x = x as f32 * 12.0 + rng.gen_range(-4.0..4.0) + 6.0;
+            let z = z as f32 * 12.0 + rng.gen_range(-4.0..4.0) + 6.0;
 
-        let mut transform = Transform::from_translation(Vec3::new(x, -0.1, z));
-        transform.rotation = Quat::from_rotation_y(rng.gen_range(0.0..std::f32::consts::TAU));
+            let mut transform = Transform::from_translation(Vec3::new(x, -0.1, z));
+            transform.rotation = Quat::from_rotation_y(rng.gen_range(0.0..std::f32::consts::TAU));
 
-        commands
-            .spawn_bundle(plant::PlantBundle {
-                transform,
-                ..Default::default()
-            })
-            .insert(asset_server.load::<plant::Genome, _>("plants/test.gno"));
+            commands
+                .spawn_bundle(plant::PlantBundle {
+                    material: plant::PlantMaterial::new(
+                        asset_server.load("textures/bark.png"),
+                        asset_server.load("textures/leaf_front.png"),
+                    ),
+                    transform,
+                    ..Default::default()
+                })
+                .insert(asset_server.load::<plant::Genome, _>("plants/test.gno"));
+        }
     }
 
     commands.spawn_bundle(MeshBundle {
@@ -112,7 +122,7 @@ impl PlayerCamera {
 
 pub fn plant_growth_system(time: Res<Time>, mut query: Query<&mut plant::PlantMaterial>) {
     for mut plant_material in query.iter_mut() {
-        plant_material.growth += time.delta_seconds() * 0.15;
+        plant_material.growth += time.delta_seconds() * 0.5;
     }
 }
 

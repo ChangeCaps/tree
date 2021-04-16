@@ -38,17 +38,19 @@ void main() {
 
     float bias = max(0.05 * (1.0 - dot(v_Normal, world_to_sun)), 0.00001);
 
+    const int BLUR = 3;
+
     float shadow = 0.0;
 
-    for (int x = -1; x <= 1; x++) {
-        for (int y = -1; y <= 1; y++) {
+    for (int x = -BLUR; x <= BLUR; x++) {
+        for (int y = -BLUR; y <= BLUR; y++) {
             vec2 offset = vec2(x, y) * texel_size;
 
             shadow += calculateShadow(s.xy * 0.5 + 0.5 + offset, dist, bias);
         }
     }
 
-    shadow /= 9.0;
+    shadow /= pow(BLUR * 2 + 1, 2);
 
     float sun_diffuse = clamp(dot(v_Normal, normalize(world_to_sun)), 0.0, 1.0);
     float sky_diffuse = sqrt(clamp(0.5 + 0.5 * v_Normal.y, 0.0, 1.0));

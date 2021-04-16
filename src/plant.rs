@@ -5,7 +5,7 @@ use bevy::{
     reflect::TypeUuid,
     render::{
         mesh::Indices,
-        pipeline::{PipelineDescriptor, RenderPipeline},
+        pipeline::{CullMode, PipelineDescriptor, PrimitiveState, RenderPipeline},
         render_graph::{base, RenderGraph, RenderResourcesNode},
         renderer::RenderResources,
         shader::ShaderStages,
@@ -28,6 +28,7 @@ pub struct Genome {
     pub leaf_start: usize,
     pub leaf_density: f32,
     pub leaf_size: f32,
+    pub leaf_length: f32,
     pub leaf_offset: f32,
     pub branch_decay: usize,
     pub branch_bend: f32,
@@ -40,6 +41,8 @@ impl Genome {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
         let mut sway = Vec::new();
+        let mut color = Vec::new();
+        let mut uv = Vec::new();
         let mut material = Vec::new();
 
         let mut rng = if let Some(seed) = &self.seed {
@@ -52,13 +55,15 @@ impl Genome {
             vertices: &mut vertices,
             indices: &mut indices,
             sway: &mut sway,
+            color: &mut color,
+            uv: &mut uv,
             material: &mut material,
             rng: &mut rng,
         };
 
         let ring = Ring::generate(self.starting_radius, self.radial_segments, 0.0);
 
-        let start_loop = ctx.add_ring(ring);
+        let start_loop = ctx.add_ring(ring, 0.0);
 
         let branch = Branch {
             start_loop,
@@ -104,16 +109,21 @@ impl Genome {
                 .collect::<Vec<[f32; 3]>>(),
         );
         mesh.set_attribute(
+            Mesh::ATTRIBUTE_UV_0,
+            uv.into_iter().map(|v| v.into()).collect::<Vec<[f32; 2]>>(),
+        );
+        mesh.set_attribute(
             Mesh::ATTRIBUTE_NORMAL,
             normals
                 .into_iter()
                 .map(|v| v.into())
                 .collect::<Vec<[f32; 3]>>(),
         );
+        mesh.set_attribute("Plant_Material", material);
         mesh.set_attribute("Plant_Sway", sway);
         mesh.set_attribute(
             "Vertex_Color",
-            material
+            color
                 .into_iter()
                 .map(|v| v.into())
                 .collect::<Vec<[f32; 4]>>(),
@@ -125,6 +135,7 @@ impl Genome {
 }
 
 pub struct Ring {
+    pub radius: f32,
     pub verts: Vec<Vec3>,
     pub sway: Vec<f32>,
 }
@@ -142,6 +153,7 @@ impl Ring {
         }
 
         Self {
+            radius,
             verts,
             sway: vec![sway; segments],
         }
@@ -164,15 +176,21 @@ pub struct PlantContext<'a> {
     pub vertices: &'a mut Vec<Vec3>,
     pub indices: &'a mut Vec<u32>,
     pub sway: &'a mut Vec<f32>,
-    pub material: &'a mut Vec<Color>,
+    pub color: &'a mut Vec<Color>,
+    pub uv: &'a mut Vec<Vec2>,
+    pub material: &'a mut Vec<u32>,
     pub rng: &'a mut rand::rngs::SmallRng,
 }
 
 impl PlantContext<'_> {
-    pub fn add_ring(&mut self, ring: Ring) -> Vec<u32> {
-        (0..ring.verts.len())
-            .into_iter()
-            .for_each(|_| self.material.push(Color::rgb(0.2, 0.1, 0.05)));
+    pub fn add_ring(&mut self, ring: Ring, v: f32) -> Vec<u32> {
+        (0..ring.verts.len()).into_iter().for_each(|i| {
+            let u = (1.0 - i as f32 / ring.verts.len() as f32 * 2.0).abs() * ring.radius;
+
+            self.uv.push(Vec2::new(u, v));
+            self.color.push(Color::rgb(1.0, 1.0, 1.0));
+            self.material.push(0);
+        });
         ring.sway.into_iter().for_each(|s| self.sway.push(s));
         ring.verts
             .into_iter()
@@ -249,7 +267,9 @@ impl Branch {
 
             if self.split >= genome.leaf_start {
                 for vert in &ring.verts {
-                    if ctx.rng.gen_range(0.0..1.0) > genome.leaf_density {
+                    if ctx.rng.gen_range(0.0..1.0)
+                        > genome.leaf_density / self.segments as f32 / self.radial_segments as f32
+                    {
                         continue;
                     }
 
@@ -277,13 +297,14 @@ impl Branch {
                         rot,
                         sway,
                         size: genome.leaf_size,
+                        length: genome.leaf_length,
                     };
 
                     leaf.generate_mesh(ctx);
                 }
             }
 
-            let mut indices = ctx.add_ring(ring);
+            let mut indices = ctx.add_ring(ring, sway);
             let len = indices.len();
             indices.rotate_left((bend.y / std::f32::consts::TAU * len as f32) as usize % len);
 
@@ -292,32 +313,49 @@ impl Branch {
             prev_loop = indices;
         }
 
-        let mut splits = ctx.rng.gen_range(genome.branches_per_split.clone());
+        let mut splits = ctx
+            .rng
+            .gen_range(genome.branches_per_split.start..=genome.branches_per_split.end);
 
         splits = splits.saturating_sub(self.branch_decay).max(1);
 
         (0..splits)
             .into_iter()
-            .map(|_| {
+            .map(|i| {
                 let mut new_bend = self.bend;
                 let mut new_direction = bend;
 
                 if self.split == 0 {
-                    new_direction.y += ctx.rng.gen_range(0.0..std::f32::consts::TAU);
+                    let angle = 1.0 / splits as f32 * std::f32::consts::TAU;
+                    let dir = i as f32 / splits as f32 * std::f32::consts::TAU;
+
+                    new_direction.y += dir + ctx.rng.gen_range(0.0..angle * 0.8);
                 } else {
-                    new_direction.y += ctx.rng.gen_range(-genome.branch_sway..genome.branch_sway);
+                    let angle = 1.0 / splits as f32 * genome.branch_sway * 0.8;
+                    let dir = (i as f32 / splits as f32 - 0.5) * genome.branch_sway * 2.0;
+
+                    new_direction.y += dir + ctx.rng.gen_range(-angle..angle);
                 }
 
                 if genome.branch_twist != 0.0 {
                     new_bend.z += ctx.rng.gen_range(-genome.branch_twist..genome.branch_twist);
                 }
 
-                new_bend.x += ctx.rng.gen_range(0.0..genome.branch_bend);
+                let bend = ctx.rng.gen_range(0.0..genome.branch_bend);
+
+                new_direction.x += bend * (2.0 / 3.0);
+                new_bend.x += bend * (1.0 / 3.0);
 
                 let end_radius = if self.split == genome.max_splits - 2 {
                     0.0
                 } else {
                     self.end_radius * genome.radius_sustain
+                };
+
+                let radial_segments = if self.split == 1 && self.radial_segments % 2 == 0 {
+                    self.radial_segments / 2
+                } else {
+                    self.radial_segments
                 };
 
                 Branch {
@@ -330,6 +368,7 @@ impl Branch {
                     direction: new_direction,
                     bend: new_bend,
                     sway: self.sway + self.length,
+                    radial_segments,
                     ..Branch::generate(genome)
                 }
             })
@@ -337,20 +376,39 @@ impl Branch {
     }
 
     pub fn bridge_loops(&self, ctx: &mut PlantContext<'_>, loop_a: &Vec<u32>, loop_b: &Vec<u32>) {
-        assert_eq!(loop_a.len(), loop_b.len());
+        if loop_a.len() == loop_b.len() {
+            for a in 0..loop_a.len() {
+                let a_next = (a + 1) % loop_a.len();
+                let b = a;
+                let b_next = (b + 1) % loop_a.len();
 
-        for a in 0..loop_a.len() {
-            let a_next = (a + 1) % loop_a.len();
-            let b = a;
-            let b_next = (b + 1) % loop_a.len();
+                ctx.indices.push(loop_b[b]);
+                ctx.indices.push(loop_a[a]);
+                ctx.indices.push(loop_a[a_next]);
 
-            ctx.indices.push(loop_b[b]);
-            ctx.indices.push(loop_a[a]);
-            ctx.indices.push(loop_a[a_next]);
+                ctx.indices.push(loop_a[a_next]);
+                ctx.indices.push(loop_b[b_next]);
+                ctx.indices.push(loop_b[b]);
+            }
+        } else if loop_a.len() * 2 == loop_b.len() {
+            for a in 0..loop_a.len() {
+                let a_1 = (a + 1) % loop_a.len();
+                let b = a * 2;
+                let b_1 = (b + 1) % loop_b.len();
+                let b_2 = (b + 2) % loop_b.len();
 
-            ctx.indices.push(loop_a[a_next]);
-            ctx.indices.push(loop_b[b_next]);
-            ctx.indices.push(loop_b[b]);
+                ctx.indices.push(loop_b[b]);
+                ctx.indices.push(loop_a[a]);
+                ctx.indices.push(loop_b[b_1]);
+
+                ctx.indices.push(loop_a[a]);
+                ctx.indices.push(loop_b[b_1]);
+                ctx.indices.push(loop_a[a_1]);
+
+                ctx.indices.push(loop_a[a_1]);
+                ctx.indices.push(loop_b[b_1]);
+                ctx.indices.push(loop_b[b_2]);
+            }
         }
     }
 }
@@ -360,35 +418,35 @@ pub struct Leaf {
     pub rot: Quat,
     pub sway: f32,
     pub size: f32,
+    pub length: f32,
 }
 
 impl Leaf {
     pub fn generate_mesh(&self, ctx: &mut PlantContext<'_>) -> Vec<u32> {
-        const E: f32 = 0.001;
-
         let mut verts = vec![
-            Vec3::new(0.0, 0.0, 0.0),
-            Vec3::new(0.3, 0.0, 1.0),
-            Vec3::new(-0.3, 0.0, 1.0),
-            Vec3::new(0.3, 0.0, 2.0),
-            Vec3::new(-0.3, 0.0, 2.0),
-            Vec3::new(0.0, 0.0, 3.0),
-            Vec3::new(0.0, E, 0.0),
-            Vec3::new(0.3, E, 1.0),
-            Vec3::new(-0.3, E, 1.0),
-            Vec3::new(0.3, E, 2.0),
-            Vec3::new(-0.3, E, 2.0),
-            Vec3::new(0.0, E, 3.0),
+            Vec3::new(-0.5, 0.0, 0.0),
+            Vec3::new(0.5, 0.0, 0.0),
+            Vec3::new(-0.5, 0.0, 1.0),
+            Vec3::new(0.5, 0.0, 1.0),
         ];
 
-        verts.iter_mut().for_each(|v| *v *= self.size);
-        verts.iter_mut().for_each(|v| *v = self.rot * *v);
-        verts.iter_mut().for_each(|v| *v += self.pos);
+        ctx.uv.push(Vec2::new(1.0, 1.0));
+        ctx.uv.push(Vec2::new(1.0, 0.0));
+        ctx.uv.push(Vec2::new(0.0, 1.0));
+        ctx.uv.push(Vec2::new(0.0, 0.0));
 
-        (0..12)
-            .into_iter()
-            .for_each(|_| ctx.material.push(Color::rgb(0.2, 0.8, 0.3)));
-        (0..12).into_iter().for_each(|_| ctx.sway.push(self.sway));
+        verts.iter_mut().for_each(|v| {
+            *v *= self.size;
+            v.y *= self.length;
+            *v = self.rot * *v;
+            *v += self.pos;
+        });
+
+        (0..4).into_iter().for_each(|_| {
+            ctx.color.push(Color::rgb(1.0, 1.0, 1.0));
+            ctx.sway.push(self.sway);
+            ctx.material.push(1);
+        });
         let indices = verts
             .into_iter()
             .map(|v| {
@@ -401,33 +459,9 @@ impl Leaf {
         ctx.indices.push(indices[1]);
         ctx.indices.push(indices[2]);
 
-        ctx.indices.push(indices[6]);
-        ctx.indices.push(indices[8]);
-        ctx.indices.push(indices[7]);
-
         ctx.indices.push(indices[1]);
         ctx.indices.push(indices[3]);
         ctx.indices.push(indices[2]);
-
-        ctx.indices.push(indices[7]);
-        ctx.indices.push(indices[8]);
-        ctx.indices.push(indices[9]);
-
-        ctx.indices.push(indices[4]);
-        ctx.indices.push(indices[2]);
-        ctx.indices.push(indices[3]);
-
-        ctx.indices.push(indices[10]);
-        ctx.indices.push(indices[8]);
-        ctx.indices.push(indices[9]);
-
-        ctx.indices.push(indices[3]);
-        ctx.indices.push(indices[5]);
-        ctx.indices.push(indices[4]);
-
-        ctx.indices.push(indices[8]);
-        ctx.indices.push(indices[11]);
-        ctx.indices.push(indices[9]);
 
         indices
     }
@@ -438,6 +472,18 @@ impl Leaf {
 pub struct PlantMaterial {
     pub time: f32,
     pub growth: f32,
+    pub texture: Handle<Texture>,
+    pub leaf_front: Handle<Texture>,
+}
+
+impl PlantMaterial {
+    pub fn new(texture: Handle<Texture>, leaf_front: Handle<Texture>) -> Self {
+        Self {
+            texture,
+            leaf_front,
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Bundle)]
@@ -526,6 +572,10 @@ impl Plugin for PlantPlugin {
         let frag = asset_server.load("shaders/plant.frag");
 
         let pipeline = PipelineDescriptor {
+            primitive: PrimitiveState {
+                cull_mode: CullMode::None,
+                ..Default::default()
+            },
             ..PipelineDescriptor::default_config(ShaderStages {
                 vertex: vert,
                 fragment: Some(frag),
