@@ -60,9 +60,7 @@ impl Terrain {
         chunk
     }
 
-    pub fn generate_mesh(&self, ) {
-
-    }
+    pub fn generate_mesh(&self) {}
 }
 
 pub struct TerrainNode {

@@ -337,12 +337,20 @@ impl Plugin for SkyPlugin {
             .unwrap();
 
         render_graph
+            .add_node_edge(MAIN_PASS_DEPTH_NODE, SKY_PASS_NODE)
+            .unwrap();
+
+        render_graph
             .add_slot_edge(
                 SKY_PASS_TEXTURE_NODE,
                 WindowTextureNode::OUT_TEXTURE,
                 MAIN_PASS_TEXTURE_NODE,
                 TextureBindNode::IN_TEXTURE,
             )
+            .unwrap();
+
+        render_graph
+            .add_node_edge(MAIN_PASS_TEXTURE_NODE, SKY_PASS_NODE)
             .unwrap();
 
         render_graph

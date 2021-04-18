@@ -63,10 +63,12 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, asset_server:
 
     let mut rng = thread_rng();
 
-    for x in -6..6 {
-        for z in -6..6 {
-            let x = x as f32 * 12.0 + rng.gen_range(-4.0..4.0) + 6.0;
-            let z = z as f32 * 12.0 + rng.gen_range(-4.0..4.0) + 6.0;
+    const SPREAD: f32 = 4.0;
+        
+    for x in -3..3 {
+        for z in -3..3 {
+            let x = x as f32 * SPREAD + rng.gen_range(-4.0..4.0) + SPREAD / 2.0;
+            let z = z as f32 * SPREAD + rng.gen_range(-4.0..4.0) + SPREAD / 2.0;
 
             let mut transform = Transform::from_translation(Vec3::new(x, -0.1, z));
             transform.rotation = Quat::from_rotation_y(rng.gen_range(0.0..std::f32::consts::TAU));
