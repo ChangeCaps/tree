@@ -44,6 +44,7 @@ impl Genome {
         let mut color = Vec::new();
         let mut uv = Vec::new();
         let mut material = Vec::new();
+        let mut leaves = 0;
 
         let mut rng = if let Some(seed) = &self.seed {
             rand::rngs::SmallRng::seed_from_u64(*seed)
@@ -58,6 +59,7 @@ impl Genome {
             color: &mut color,
             uv: &mut uv,
             material: &mut material,
+            leaves: &mut leaves,
             rng: &mut rng,
         };
 
@@ -100,6 +102,12 @@ impl Genome {
         for normal in &mut normals {
             *normal = normal.normalize();
         }
+
+        println!("Tree:");
+        println!(" tris: {}", indices.len() / 3);
+        println!(" verts: {}", vertices.len());
+        println!(" leaves: {}", leaves);
+        println!(" leaf_tris: {}", leaves * 2);
 
         mesh.set_attribute(
             Mesh::ATTRIBUTE_POSITION,
@@ -179,6 +187,7 @@ pub struct PlantContext<'a> {
     pub color: &'a mut Vec<Color>,
     pub uv: &'a mut Vec<Vec2>,
     pub material: &'a mut Vec<u32>,
+    pub leaves: &'a mut usize,
     pub rng: &'a mut rand::rngs::SmallRng,
 }
 
@@ -423,6 +432,8 @@ pub struct Leaf {
 
 impl Leaf {
     pub fn generate_mesh(&self, ctx: &mut PlantContext<'_>) -> Vec<u32> {
+        *ctx.leaves += 1;
+
         let mut verts = vec![
             Vec3::new(-0.5, 0.0, 0.0),
             Vec3::new(0.5, 0.0, 0.0),

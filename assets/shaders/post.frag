@@ -39,13 +39,12 @@ void main() {
     float z_far = 1000.0;
 
 
-    vec3 pos = CamPos;
+    vec3 org = CamPos;
     vec3 dir = far.xyz - near.xyz;
     dir = normalize(dir);
 
-    const int SAMPLES = 400;
-    const float MAX_LENGTH = 16.0;
-    float step_size = MAX_LENGTH / SAMPLES;
+    const int SAMPLES = 250;
+    const float MAX_LENGTH = 8.0;
 
     float sun = 0.0;
 
@@ -58,15 +57,13 @@ void main() {
     float z = (2.0 * z_near) / (z_far + z_near - main_depth * (z_far - z_near));
     z *= z_far - z_near;
 
-    float l = 0.0;
-
     for (int x = 0; x < SAMPLES; x++) {
         //step_size += 0.001;
-        pos += dir * step_size;
-        l += step_size;
+        float l = pow(float(x) / float(SAMPLES), 2) * MAX_LENGTH;
+        vec3 pos = org + dir * l;
 
         vec4 p = (SunProj * vec4(pos, 1.0));
-        p.xyz /= p.w;
+        p.xy /= p.w;
         p.y *= -1.0;
 
         float depth = texture(sampler2D(ShadowMapTexture, ShadowMapSampler), p.xy * 0.5 + 0.5).x;
@@ -74,7 +71,8 @@ void main() {
 
         if (dist < depth && l < z) {
             //sun += min(1.0 / , 1.0);
-            sun += l / MAX_LENGTH;
+            float s = l / MAX_LENGTH;
+            sun += min(s, 1.0 - s);
         }
     }
 
