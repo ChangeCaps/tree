@@ -20,70 +20,10 @@ layout(set = 1, binding = 0) uniform Sun {
 layout(set = 2, binding = 0) uniform texture2D SkyPassTexture;
 layout(set = 2, binding = 1) uniform sampler SkyPassTextureSampler;
 
-layout(set = 2, binding = 2) uniform texture2DMS SkyPassDepth;
-layout(set = 2, binding = 3) uniform sampler SkyPassDepthSampler;
-
 layout(set = 2, binding = 4) uniform texture2D VolumePassTexture;
 layout(set = 2, binding = 5) uniform sampler VolumePassTextureSampler;
 
-layout(set = 3, binding = 0) uniform texture2D ShadowMapTexture;
-layout(set = 3, binding = 1) uniform sampler ShadowMapSampler;
-
 void main() {
-    vec2 uv = v_Uv * 2.0 - 1.0;
-    uv.y *= -1.0;
-    mat4 inverse_proj = inverse(CamProj);
-    vec4 near = vec4(uv.x, uv.y, 0.0, 1.0);
-    near = inverse_proj * near;
-    vec4 far = near + inverse_proj[2];
-    near.xyz /= near.w;
-    far.xyz /= far.w;
-    float z_near = 1.0;
-    float z_far = 1000.0;
-
-
-    vec3 org = CamPos;
-    vec3 dir = far.xyz - near.xyz;
-    dir = normalize(dir);
-
-    const int SAMPLES = 250;
-    const float MAX_LENGTH = 16.0;
-
-    float sun = 0.0;
-
-    vec2 depth_uv = v_Uv;
-
-    vec2 main_depth_size = textureSize(sampler2DMS(SkyPassDepth, SkyPassDepthSampler)).xy;
-    float main_depth = texelFetch(sampler2DMS(SkyPassDepth, SkyPassDepthSampler), ivec2(depth_uv * main_depth_size), 0).x;
-    main_depth *= 2.0;
-    main_depth -= 1.0;
-    float z = (2.0 * z_near) / (z_far + z_near - main_depth * (z_far - z_near));
-    z *= z_far - z_near;
-
-	float ray_length = min(z, MAX_LENGTH);
-
-    for (int x = 0; x < SAMPLES; x++) {
-        //step_size += 0.001;
-        float l = pow(float(x) / float(SAMPLES), 2) * ray_length;
-        vec3 pos = org + dir * l;
-
-        vec4 p = (SunProj * vec4(pos, 1.0));
-        p.xy /= p.w;
-        p.y *= -1.0;
-
-        float depth = texture(sampler2D(ShadowMapTexture, ShadowMapSampler), p.xy * 0.5 + 0.5).x;
-        float dist = length(pos - SunPos) / 200.0;
-
-        if (dist < depth) {
-            //sun += min(1.0 / , 1.0);
-            float s = l / MAX_LENGTH;
-            sun += min(s, 1.0 - s);
-        }
-    }
-
-    sun /= SAMPLES;
-    sun = min(sun, 0.1);
-
     vec3 color = vec3(0.0);
 
     vec2 texel_size = 1.0 / textureSize(sampler2D(SkyPassTexture, SkyPassTextureSampler), 0).xy;
@@ -104,9 +44,29 @@ void main() {
         color /= pow(BLUR * 2 + 1, 2);
     }
 
+    vec2 texture_size = textureSize(sampler2D(VolumePassTexture, VolumePassTextureSampler), 0).xy;
+
+    const int SUN_BLUR = 2;
+
+    float sun = 0.0;
+
+    for (int x = -SUN_BLUR; x < SUN_BLUR; x++) {
+        for (int y = -SUN_BLUR; y < SUN_BLUR; y++) {
+            vec2 offset = vec2(x, y) / texture_size;
+
+            float s = texture(sampler2D(VolumePassTexture, VolumePassTextureSampler), v_Uv + offset, 0).x;
+
+            sun += s;
+        }
+    }
+
+    if (SUN_BLUR > 0) {
+        sun /= pow(SUN_BLUR * 2 + 1, 2);
+    }
+
     color = color * vec3(1.11, 0.89, 0.79);
     color = 1.35 * color / (1.0 + color);
-    color *= 0.5 + sun * 10.0;
+    color += vec3(1.0, 0.8, 0.2) * sun * 1.0;
     //color = vec3(z);
 
     o_Target = vec4(color, 1.0);

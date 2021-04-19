@@ -10,7 +10,6 @@ use rand::prelude::*;
 
 fn main() {
     App::build()
-        .insert_resource(Msaa { samples: 4 })
         .insert_resource(ClearColor(Color::rgba(0.0, 0.0, 0.0, 0.0)))
         .insert_resource(WindowDescriptor {
             vsync: false,

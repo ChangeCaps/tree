@@ -577,7 +577,6 @@ impl Plugin for PlantPlugin {
         app_builder.add_system(plant_material_system.system());
 
         let asset_server = app_builder.world().get_resource::<AssetServer>().unwrap();
-        asset_server.watch_for_changes().unwrap();
 
         let vert = asset_server.load("shaders/plant.vert");
         let frag = asset_server.load("shaders/plant.frag");

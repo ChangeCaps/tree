@@ -273,6 +273,7 @@ pub struct SkyPlugin;
 impl Plugin for SkyPlugin {
     fn build(&self, app_builder: &mut AppBuilder) {
         let asset_server = app_builder.world().get_resource::<AssetServer>().unwrap();
+        asset_server.watch_for_changes().unwrap();
 
         let vert = asset_server.load("shaders/sky.vert");
         let frag = asset_server.load("shaders/sky.frag");
@@ -382,7 +383,7 @@ impl Plugin for SkyPlugin {
                         height: 1,
                     },
                     mip_level_count: 1,
-                    sample_count: 4,
+                    sample_count: 1,
                     dimension: TextureDimension::D2,
                     format: TextureFormat::default(),
                     usage: TextureUsage::SAMPLED | TextureUsage::OUTPUT_ATTACHMENT,
@@ -530,15 +531,6 @@ impl Plugin for SkyPlugin {
                 SKY_PASS_TEXTURE_NODE,
                 WindowTextureNode::OUT_TEXTURE,
                 base::node::MAIN_PASS,
-                "color_resolve_target",
-            )
-            .unwrap();
-
-        render_graph
-            .add_slot_edge(
-                base::node::MAIN_SAMPLED_COLOR_ATTACHMENT,
-                WindowSwapChainNode::OUT_TEXTURE,
-                SKY_PASS_NODE,
                 "color_attachment",
             )
             .unwrap();
@@ -548,7 +540,7 @@ impl Plugin for SkyPlugin {
                 base::node::PRIMARY_SWAP_CHAIN,
                 WindowSwapChainNode::OUT_TEXTURE,
                 SKY_PASS_NODE,
-                "color_resolve_target",
+                "color_attachment",
             )
             .unwrap();
 
