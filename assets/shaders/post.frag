@@ -23,6 +23,9 @@ layout(set = 2, binding = 1) uniform sampler SkyPassTextureSampler;
 layout(set = 2, binding = 2) uniform texture2DMS SkyPassDepth;
 layout(set = 2, binding = 3) uniform sampler SkyPassDepthSampler;
 
+layout(set = 2, binding = 4) uniform texture2D VolumePassTexture;
+layout(set = 2, binding = 5) uniform sampler VolumePassTextureSampler;
+
 layout(set = 3, binding = 0) uniform texture2D ShadowMapTexture;
 layout(set = 3, binding = 1) uniform sampler ShadowMapSampler;
 
@@ -44,7 +47,7 @@ void main() {
     dir = normalize(dir);
 
     const int SAMPLES = 250;
-    const float MAX_LENGTH = 8.0;
+    const float MAX_LENGTH = 16.0;
 
     float sun = 0.0;
 
@@ -57,9 +60,11 @@ void main() {
     float z = (2.0 * z_near) / (z_far + z_near - main_depth * (z_far - z_near));
     z *= z_far - z_near;
 
+	float ray_length = min(z, MAX_LENGTH);
+
     for (int x = 0; x < SAMPLES; x++) {
         //step_size += 0.001;
-        float l = pow(float(x) / float(SAMPLES), 2) * MAX_LENGTH;
+        float l = pow(float(x) / float(SAMPLES), 2) * ray_length;
         vec3 pos = org + dir * l;
 
         vec4 p = (SunProj * vec4(pos, 1.0));
@@ -69,7 +74,7 @@ void main() {
         float depth = texture(sampler2D(ShadowMapTexture, ShadowMapSampler), p.xy * 0.5 + 0.5).x;
         float dist = length(pos - SunPos) / 200.0;
 
-        if (dist < depth && l < z) {
+        if (dist < depth) {
             //sun += min(1.0 / , 1.0);
             float s = l / MAX_LENGTH;
             sun += min(s, 1.0 - s);

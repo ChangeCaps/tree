@@ -64,7 +64,7 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, asset_server:
     let mut rng = thread_rng();
 
     const SPREAD: f32 = 4.0;
-        
+
     for x in -3..3 {
         for z in -3..3 {
             let x = x as f32 * SPREAD + rng.gen_range(-4.0..4.0) + SPREAD / 2.0;
@@ -97,6 +97,18 @@ fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, asset_server:
     commands.spawn_bundle(sky::PostBundle {
         ..Default::default()
     });
+
+    commands
+        .spawn()
+        .insert(bevy::sprite::QUAD_HANDLE.typed::<Mesh>())
+        .insert(Draw::default())
+        .insert(Visible::default())
+        .insert(RenderPipelines::from_pipelines(vec![
+            bevy::render::pipeline::RenderPipeline::new(sky::VOLUME_PIPELINE.typed()),
+        ]))
+        .insert(Transform::default())
+        .insert(GlobalTransform::default())
+        .insert(sky::VolumePass);
 
     commands.spawn_bundle(sun::ShadedBundle {
         mesh: meshes.add(shape::Plane { size: 2000.0 }.into()),

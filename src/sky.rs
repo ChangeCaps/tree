@@ -1,4 +1,5 @@
 use bevy::{
+    app::{Events, ManualEventReader},
     core::AsBytes,
     ecs::{
         query::{QueryState, ReadOnlyFetch, WorldQuery},
@@ -36,13 +37,16 @@ use bevy::{
             TEXTURE_ASSET_INDEX,
         },
     },
-    window::WindowId,
+    window::{WindowCreated, WindowId, WindowResized},
 };
 use std::sync::{Arc, Mutex};
 
 pub const SKY_PASS_NODE: &str = "sky_pass_node";
 pub const SKY_PASS_DEPTH_NODE: &str = "sky_pass_depth";
 pub const SKY_PASS_TEXTURE_NODE: &str = "sky_pass_texture";
+pub const VOLUME_PASS_NODE: &str = "volume_pass_node";
+pub const VOLUME_PASS_TEXTURE: &str = "volume_pass_texture";
+pub const VOLUME_PASS_TEXTURE_NODE: &str = "volume_pass_texture_binding";
 pub const MAIN_PASS_DEPTH_NODE: &str = "main_pass_depth";
 pub const MAIN_PASS_TEXTURE_NODE: &str = "main_pass_texture";
 pub const POST_DATA_NODE: &str = "pass_data_node";
@@ -50,7 +54,80 @@ pub const SKY_PIPELINE: HandleUntyped =
     HandleUntyped::weak_from_u64(PipelineDescriptor::TYPE_UUID, 956872324);
 pub const POST_PIPELINE: HandleUntyped =
     HandleUntyped::weak_from_u64(PipelineDescriptor::TYPE_UUID, 82346125);
+pub const VOLUME_PIPELINE: HandleUntyped =
+    HandleUntyped::weak_from_u64(PipelineDescriptor::TYPE_UUID, 82345436798);
 
+pub struct ScaledWindowTextureNode {
+    window_id: WindowId,
+    descriptor: TextureDescriptor,
+    window_created_event_reader: ManualEventReader<WindowCreated>,
+    window_resized_event_reader: ManualEventReader<WindowResized>,
+    scale: u32,
+}
+
+impl ScaledWindowTextureNode {
+    pub const OUT_TEXTURE: &'static str = "texture";
+
+    pub fn new(window_id: WindowId, descriptor: TextureDescriptor, scale: u32) -> Self {
+        Self {
+            window_id,
+            descriptor,
+            window_created_event_reader: Default::default(),
+            window_resized_event_reader: Default::default(),
+            scale,
+        }
+    }
+}
+
+impl Node for ScaledWindowTextureNode {
+    fn output(&self) -> &[ResourceSlotInfo] {
+        &[ResourceSlotInfo {
+            name: std::borrow::Cow::Borrowed(ScaledWindowTextureNode::OUT_TEXTURE),
+            resource_type: RenderResourceType::Texture,
+        }]
+    }
+
+    fn update(
+        &mut self,
+        world: &World,
+        render_context: &mut dyn RenderContext,
+        _input: &ResourceSlots,
+        output: &mut ResourceSlots,
+    ) {
+        let window_created_events = world.get_resource::<Events<WindowCreated>>().unwrap();
+        let window_resized_events = world.get_resource::<Events<WindowResized>>().unwrap();
+        let windows = world.get_resource::<Windows>().unwrap();
+
+        let window = windows
+            .get(self.window_id)
+            .expect("Window texture node refers to a non-existent window.");
+
+        if self
+            .window_created_event_reader
+            .iter(&window_created_events)
+            .any(|e| e.id == window.id())
+            || self
+                .window_resized_event_reader
+                .iter(&window_resized_events)
+                .any(|e| e.id == window.id())
+        {
+            let render_resource_context = render_context.resources_mut();
+            if let Some(RenderResourceId::Texture(old_texture)) =
+                output.get(ScaledWindowTextureNode::OUT_TEXTURE)
+            {
+                render_resource_context.remove_texture(old_texture);
+            }
+
+            self.descriptor.size.width = window.physical_width() / self.scale;
+            self.descriptor.size.height = window.physical_height() / self.scale;
+            let texture_resource = render_resource_context.create_texture(self.descriptor);
+            output.set(
+                ScaledWindowTextureNode::OUT_TEXTURE,
+                RenderResourceId::Texture(texture_resource),
+            );
+        }
+    }
+}
 pub struct TextureBindNode {
     texture: Option<TextureId>,
     sampler: Option<SamplerId>,
@@ -125,6 +202,7 @@ impl Node for TextureBindNode {
 }
 
 pub struct PostPass;
+pub struct VolumePass;
 
 #[derive(RenderResources)]
 pub struct PostData {}
@@ -216,6 +294,17 @@ impl Plugin for SkyPlugin {
             })
         };
 
+        let vert = asset_server.load("shaders/volume.vert");
+        let frag = asset_server.load("shaders/volume.frag");
+
+        let volume_pipeline = PipelineDescriptor {
+            depth_stencil: None,
+            ..PipelineDescriptor::default_config(ShaderStages {
+                vertex: vert,
+                fragment: Some(frag),
+            })
+        };
+
         app_builder
             .world_mut()
             .get_resource_mut::<Assets<PipelineDescriptor>>()
@@ -227,6 +316,12 @@ impl Plugin for SkyPlugin {
             .get_resource_mut::<Assets<PipelineDescriptor>>()
             .unwrap()
             .set_untracked(POST_PIPELINE, post_pipeline);
+
+        app_builder
+            .world_mut()
+            .get_resource_mut::<Assets<PipelineDescriptor>>()
+            .unwrap()
+            .set_untracked(VOLUME_PIPELINE, volume_pipeline);
 
         let msaa = app_builder.world().get_resource::<Msaa>().unwrap();
         let samples = msaa.samples;
@@ -253,12 +348,48 @@ impl Plugin for SkyPlugin {
 
         sky_pass_node.add_camera(base::camera::CAMERA_3D);
 
+        let mut volume_pass_node = PassNode::<&VolumePass>::new(PassDescriptor {
+            color_attachments: vec![RenderPassColorAttachmentDescriptor {
+                attachment: TextureAttachment::Input("color_attachment".to_string()),
+                resolve_target: None,
+                ops: Operations {
+                    load: LoadOp::Clear(Color::rgba(0.0, 0.0, 0.0, 0.0)),
+                    store: true,
+                },
+            }],
+            depth_stencil_attachment: None,
+            sample_count: 1,
+        });
+
+        volume_pass_node.add_camera(base::camera::CAMERA_3D);
+
         let mut render_graph = app_builder
             .world_mut()
             .get_resource_mut::<RenderGraph>()
             .unwrap();
 
         render_graph.add_node(SKY_PASS_NODE, sky_pass_node);
+        render_graph.add_node(VOLUME_PASS_NODE, volume_pass_node);
+
+        render_graph.add_node(
+            VOLUME_PASS_TEXTURE,
+            ScaledWindowTextureNode::new(
+                WindowId::primary(),
+                TextureDescriptor {
+                    size: Extent3d {
+                        depth: 1,
+                        width: 1,
+                        height: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 4,
+                    dimension: TextureDimension::D2,
+                    format: TextureFormat::default(),
+                    usage: TextureUsage::SAMPLED | TextureUsage::OUTPUT_ATTACHMENT,
+                },
+                2,
+            ),
+        );
 
         render_graph.add_node(
             SKY_PASS_DEPTH_NODE,
@@ -308,6 +439,15 @@ impl Plugin for SkyPlugin {
         );
 
         render_graph.add_node(
+            VOLUME_PASS_TEXTURE_NODE,
+            TextureBindNode::new(
+                sampler_descriptor,
+                "VolumePassTexture",
+                "VolumePassTextureSampler",
+            ),
+        );
+
+        render_graph.add_node(
             MAIN_PASS_DEPTH_NODE,
             TextureBindNode::new(sampler_descriptor, "SkyPassDepth", "SkyPassDepthSampler"),
         );
@@ -316,6 +456,15 @@ impl Plugin for SkyPlugin {
 
         render_graph
             .add_node_edge(POST_DATA_NODE, SKY_PASS_NODE)
+            .unwrap();
+
+        render_graph
+            .add_slot_edge(
+                VOLUME_PASS_TEXTURE,
+                ScaledWindowTextureNode::OUT_TEXTURE,
+                VOLUME_PASS_NODE,
+                "color_attachment",
+            )
             .unwrap();
 
         render_graph
@@ -329,6 +478,19 @@ impl Plugin for SkyPlugin {
 
         render_graph
             .add_slot_edge(
+                VOLUME_PASS_TEXTURE,
+                ScaledWindowTextureNode::OUT_TEXTURE,
+                VOLUME_PASS_TEXTURE_NODE,
+                TextureBindNode::IN_TEXTURE,
+            )
+            .unwrap();
+
+        render_graph
+            .add_node_edge(VOLUME_PASS_TEXTURE_NODE, SKY_PASS_NODE)
+            .unwrap();
+
+        render_graph
+            .add_slot_edge(
                 SKY_PASS_DEPTH_NODE,
                 WindowTextureNode::OUT_TEXTURE,
                 MAIN_PASS_DEPTH_NODE,
@@ -337,7 +499,7 @@ impl Plugin for SkyPlugin {
             .unwrap();
 
         render_graph
-            .add_node_edge(MAIN_PASS_DEPTH_NODE, SKY_PASS_NODE)
+            .add_node_edge(MAIN_PASS_DEPTH_NODE, VOLUME_PASS_NODE)
             .unwrap();
 
         render_graph
@@ -354,7 +516,10 @@ impl Plugin for SkyPlugin {
             .unwrap();
 
         render_graph
-            .add_node_edge(base::node::MAIN_PASS, SKY_PASS_NODE)
+            .add_node_edge(base::node::MAIN_PASS, VOLUME_PASS_NODE)
+            .unwrap();
+        render_graph
+            .add_node_edge(VOLUME_PASS_NODE, SKY_PASS_NODE)
             .unwrap();
         render_graph
             .add_node_edge(SKY_PASS_NODE, bevy::ui::node::UI_PASS)
